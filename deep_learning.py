@@ -21,6 +21,7 @@ cfg = {
 # installing packages, use specific versions
 # !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10
 
+from collections import OrderedDict
 import re
 import torch
 import torchvision
@@ -299,88 +300,165 @@ def test_loop(dataloader, model, loss_fn):
     wandb_run.log({"val_acc": correct, "val_loss": test_loss})
 
 
-"""## Define model, loss"""
+"""## Define model"""
 
-
-class MetaNet(torch.nn.Module):
-    def __init__(
-        self,
-        device: str,
-        image_embedding_size: int = 768,
-        text_embedding_size: int = 512,
-        hidden_reduction_factor: int = 16,
-    ) -> None:
+class TextEncoder(torch.nn.Module):
+    def __init__(self, clip_model, device):
         super().__init__()
-        hidden_layer_size = image_embedding_size // hidden_reduction_factor
-        self.lin_stack = torch.nn.Sequential(
-            torch.nn.Linear(image_embedding_size, hidden_layer_size),
-            torch.nn.ReLU(),
-            torch.nn.Linear(hidden_layer_size, text_embedding_size),
+        self.transformer = clip_model.transformer
+        self.positional_embedding = clip_model.positional_embedding
+        self.ln_final = clip_model.ln_final
+        self.text_projection = clip_model.text_projection
+        self.dtype = clip_model.dtype
+
+    def forward(self, prompts, tokenized_prompts):
+        x = prompts + self.positional_embedding.type(self.dtype)
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = self.ln_final(x).type(self.dtype)
+
+        # x.shape = [batch_size, n_ctx, transformer.width]
+        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
+
+        return x
+
+
+class PromptLearner(torch.nn.Module):
+    def __init__(self, cfg, classnames, clip_model, tokenizer, device):
+        super().__init__()
+        n_cls = len(classnames)
+        n_ctx = cfg.TRAINER.COCOOP.N_CTX
+        ctx_init = cfg.TRAINER.COCOOP.CTX_INIT
+        dtype = clip_model.dtype
+        ctx_dim = clip_model.ln_final.weight.shape[0]
+        vis_dim = clip_model.visual.output_dim
+        clip_imsize = clip_model.visual.input_resolution
+        cfg_imsize = cfg.INPUT.SIZE[0]
+        assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
+
+        if ctx_init:
+            # use given words to initialize context vectors
+            ctx_init = ctx_init.replace("_", " ")
+            n_ctx = len(ctx_init.split(" "))
+            prompt = tokenizer(ctx_init)
+            with torch.no_grad():
+                embedding = clip_model.token_embedding(prompt).type(dtype)
+            ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
+            prompt_prefix = ctx_init
+        else:
+            # random initialization
+            ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
+            torch.nn.init.normal_(ctx_vectors, std=0.02)
+            prompt_prefix = " ".join(["X"] * n_ctx)
+
+        print(f'Initial context: "{prompt_prefix}"')
+        print(f"Number of context words (tokens): {n_ctx}")
+
+        self.ctx = torch.nn.Parameter(ctx_vectors)
+
+        self.meta_net = torch.nn.Sequential(OrderedDict([
+            ("linear1", torch.nn.Linear(vis_dim, vis_dim // 16)),
+            ("relu", torch.nn.ReLU(inplace=True)),
+            ("linear2", torch.nn.Linear(vis_dim // 16, ctx_dim))
+        ]))
+        
+        if cfg.TRAINER.COCOOP.PREC == "fp16":
+            self.meta_net.half()
+
+        classnames = [name.replace("_", " ") for name in classnames]
+        name_lens = [len(clip_model.encode(name)) for name in classnames]
+        prompts = [prompt_prefix + " " + name + "." for name in classnames]
+
+        tokenized_prompts = torch.cat([tokenizer(p) for p in prompts])  # (n_cls, n_tkn)
+        with torch.no_grad():
+            embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
+
+        # These token vectors will be saved when in save_model(),
+        # but they should be ignored in load_model() as we want to use
+        # those computed using the current class names
+        self.register_buffer("token_prefix", embedding[:, :1, :])  # SOS
+        self.register_buffer("token_suffix", embedding[:, 1 + n_ctx :, :])  # CLS, EOS
+
+        self.n_cls = n_cls
+        self.n_ctx = n_ctx
+        self.tokenized_prompts = tokenized_prompts  # torch.Tensor
+        self.name_lens = name_lens
+    
+    def construct_prompts(self, ctx, prefix, suffix, label=None):
+        # dim0 is either batch_size (during training) or n_cls (during testing)
+        # ctx: context tokens, with shape of (dim0, n_ctx, ctx_dim)
+        # prefix: the sos token, with shape of (n_cls, 1, ctx_dim)
+        # suffix: remaining tokens, with shape of (n_cls, *, ctx_dim)
+
+        if label is not None:
+            prefix = prefix[label]
+            suffix = suffix[label]
+
+        prompts = torch.cat(
+            [
+                prefix,  # (dim0, 1, dim)
+                ctx,     # (dim0, n_ctx, dim)
+                suffix,  # (dim0, *, dim)
+            ],
+            dim=1,
         )
 
-    def forward(self, x):
-        x = torch.nn.Flatten(x)
-        logits = self.lin_stack(x)
+        return prompts
+
+    def forward(self, im_features):
+        prefix = self.token_prefix
+        suffix = self.token_suffix
+        ctx = self.ctx                     # (n_ctx, ctx_dim)
+        bias = self.meta_net(im_features)  # (batch, ctx_dim)
+        bias = bias.unsqueeze(1)           # (batch, 1, ctx_dim)
+        ctx = ctx.unsqueeze(0)             # (1, n_ctx, ctx_dim)
+        ctx_shifted = ctx + bias           # (batch, n_ctx, ctx_dim)
+        
+        # Use instance-conditioned context tokens for all classes
+        prompts = []
+        for ctx_shifted_i in ctx_shifted:
+            ctx_i = ctx_shifted_i.unsqueeze(0).expand(self.n_cls, -1, -1)
+            pts_i = self.construct_prompts(ctx_i, prefix, suffix)  # (n_cls, n_tkn, ctx_dim)
+            prompts.append(pts_i)
+        prompts = torch.stack(prompts)
+        
+        return prompts
+
+
+class CustomCLIP(torch.nn.Module):
+    def __init__(self, cfg, classnames, clip_model, tokenizer, device):
+        super().__init__()
+        self.prompt_learner = PromptLearner(cfg["prompt_learner"], classnames, clip_model, device)
+        self.tokenized_prompts = self.prompt_learner.tokenized_prompts
+        self.image_encoder = clip_model.visual
+        self.text_encoder = TextEncoder(clip_model, device)
+        self.logit_scale = clip_model.logit_scale
+        self.dtype = clip_model.dtype
+
+    def forward(self, image, label=None):
+        tokenized_prompts = self.tokenized_prompts
+        logit_scale = self.logit_scale.exp()
+
+        image_features = self.image_encoder(image.type(self.dtype))
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+        prompts = self.prompt_learner(image_features)
+        
+        logits = []
+        for pts_i, imf_i in zip(prompts, image_features):
+            text_features = self.text_encoder(pts_i, tokenized_prompts)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            l_i = logit_scale * imf_i @ text_features.t()
+            logits.append(l_i)
+        logits = torch.stack(logits)
+        
+        if self.prompt_learner.training:
+            assert label
+            return torch.nn.functional.cross_entropy(logits, label)
+        
         return logits
-
-
-class CustomModel(torch.nn.Module):
-    def __init__(
-        self,
-        device: str,
-        text_embedding_size: int = 512,
-        context_size: int = 16,
-        class_location="end",
-    ) -> None:
-        super().__init__()
-        assert (
-            class_location == "end"
-            "We only support class location at the end, feel free to implement others :)"
-        )
-        result = open_clip.create_model_from_pretrained(
-            model_name=cfg["base_model"]["name"],
-            pretrained=cfg["base_model"]["weights"],
-            device=device,
-            return_transform=True,
-        )
-        assert isinstance(result, tuple)
-        self.clip, self.preprocess = result
-        self.tokenizer = open_clip.get_tokenizer(cfg["base_model"]["name"])
-        for p in self.clip.parameters():
-            p.requires_grad = False
-
-        self.meta_net = MetaNet(device)
-        # prompt is initialized from normal distribution with mean 0 and std 0.02 like in the paper
-        self.unified_context = torch.nn.Parameter(
-            0.02 * torch.randn(context_size, text_embedding_size, device=device), requires_grad=True
-        )
-        self.text_inputs = self._generate_text_input()
-
-    def forward(self, images):
-        _, text_logits = self.clip.get_logits(images, self.text_inputs)
-        return text_logits
-
-    def _generate_text_input(self):
-        tokenized_classes = [
-            [self.tokenizer.sot_token_id]
-            + self.tokenizer.encode(re.sub("-", " ", class_name))
-            + self.tokenizer.eot_token_id
-            for class_name in CLASS_NAMES
-        ]
-        tokenized_class_lens = [len(tokenized_class) for tokenized_class in tokenized_classes]
-
-        result = torch.zeros((len(tokenized_classes), 1 + max(tokenized_class_lens)))
-        for i, tokenized_class in enumerate(tokenized_classes):
-            pass
-
-        return result
-
-
-def create_custom_model(device):
-    model = CustomModel(device)
-    preprocess = model.preprocess
-    tokenizer = open_clip.get_tokenizer(cfg["base_model"]["name"])
-    return model, preprocess, tokenizer
 
 
 def create_base_model(device):
@@ -396,13 +474,18 @@ def create_base_model(device):
     return model, preprocess, tokenizer
 
 
+def create_custom_model(device):
+    base_model, preprocess, tokenizer = create_base_model(device)
+    model = CustomCLIP(cfg["cocoop"], CLASS_NAMES, base_model, tokenizer, device)
+    return model, preprocess
+
 """## Initialize model"""
 
 device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
 print(f"Using {device} device")
 
 base_model, base_preprocess, base_tokenizer = create_base_model(device)
-custom_model, custom_preprocess, custom_tokenizer = create_custom_model(device)
+custom_model, custom_preprocess = create_custom_model(device)
 print(base_model)
 
 """# Load and prepare data
