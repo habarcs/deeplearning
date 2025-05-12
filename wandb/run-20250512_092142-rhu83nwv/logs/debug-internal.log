@@ -1,0 +1,15 @@
+{"time":"2025-05-12T09:21:42.132235027+02:00","level":"INFO","msg":"stream: starting","core version":"0.19.10","symlink path":"/home/joaquin_l_calvo/projects/DL2024/deeplearning/wandb/run-20250512_092142-rhu83nwv/logs/debug-core.log"}
+{"time":"2025-05-12T09:21:45.759001204+02:00","level":"INFO","msg":"created new stream","id":"rhu83nwv"}
+{"time":"2025-05-12T09:21:45.759051387+02:00","level":"INFO","msg":"stream: started","id":"rhu83nwv"}
+{"time":"2025-05-12T09:21:45.759307868+02:00","level":"INFO","msg":"writer: Do: started","stream_id":"rhu83nwv"}
+{"time":"2025-05-12T09:21:45.759574988+02:00","level":"INFO","msg":"handler: started","stream_id":"rhu83nwv"}
+{"time":"2025-05-12T09:21:45.761733111+02:00","level":"INFO","msg":"sender: started","stream_id":"rhu83nwv"}
+{"time":"2025-05-12T09:21:46.062488044+02:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-05-12T09:21:50.716613665+02:00","level":"INFO","msg":"stream: closing","id":"rhu83nwv"}
+{"time":"2025-05-12T09:21:50.716657702+02:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-05-12T09:21:50.716746618+02:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-05-12T09:21:51.551723605+02:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-05-12T09:21:51.957874861+02:00","level":"INFO","msg":"handler: closed","stream_id":"rhu83nwv"}
+{"time":"2025-05-12T09:21:51.957921044+02:00","level":"INFO","msg":"writer: Close: closed","stream_id":"rhu83nwv"}
+{"time":"2025-05-12T09:21:51.957955877+02:00","level":"INFO","msg":"sender: closed","stream_id":"rhu83nwv"}
+{"time":"2025-05-12T09:21:51.958006114+02:00","level":"INFO","msg":"stream: closed","id":"rhu83nwv"}

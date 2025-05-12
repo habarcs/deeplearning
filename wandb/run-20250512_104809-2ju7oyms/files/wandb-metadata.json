@@ -1,0 +1,31 @@
+{
+  "os": "Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "python": "CPython 3.12.3",
+  "startedAt": "2025-05-12T08:48:09.587227Z",
+  "program": "/home/joaquin_l_calvo/projects/DL2024/deeplearning/deep_learning.py",
+  "codePath": "deep_learning.py",
+  "git": {
+    "remote": "https://github.com/habarcs/deeplearning.git",
+    "commit": "101e37789d7ac59fb1e789f28fb756dbda15ed6e"
+  },
+  "email": "joaquinlcalvo@gmail.com",
+  "root": "/home/joaquin_l_calvo/projects/DL2024/deeplearning",
+  "host": "DESKTOP-LQJ6T08",
+  "executable": "/home/joaquin_l_calvo/venvs/auditect-base/bin/python",
+  "codePathLocal": "deep_learning.py",
+  "cpu_count": 8,
+  "cpu_count_logical": 16,
+  "disk": {
+    "/": {
+      "total": "1081101176832",
+      "used": "20716670976"
+    }
+  },
+  "memory": {
+    "total": "16370712576"
+  },
+  "cpu": {
+    "count": 8,
+    "countLogical": 16
+  }
+}

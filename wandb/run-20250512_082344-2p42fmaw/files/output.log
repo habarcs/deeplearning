@@ -1,0 +1,20 @@
+Using cuda device
+2025-05-12 08:23:53,323 - root - INFO - Loaded ViT-B-32 model config.
+open_clip_model.safetensors: 100%|███████████████████████████████████████| 605M/605M [00:21<00:00, 28.6MB/s]
+2025-05-12 08:24:18,881 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-12 08:24:19,898 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-12 08:24:24,339 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+Traceback (most recent call last):
+  File "/home/joaquin_l_calvo/projects/DL2024/deeplearning/deep_learning.py", line 657, in <module>
+    custom_model, custom_preprocess, custom_tokenizer = create_custom_model(device)
+                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/projects/DL2024/deeplearning/deep_learning.py", line 648, in create_custom_model
+    model = CustomCLIP(cfg["cocoop"], CLASS_NAMES, base_model, tokenizer, device)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/projects/DL2024/deeplearning/deep_learning.py", line 599, in __init__
+    self.prompt_learner = PromptLearner(cfg, classnames, clip_model, tokenizer, device) #don't we need this tokenizer here?
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/projects/DL2024/deeplearning/deep_learning.py", line 498, in __init__
+    n_ctx = cfg.TRAINER.COCOOP.N_CTX
+            ^^^^^^^^^^^
+AttributeError: 'dict' object has no attribute 'TRAINER'

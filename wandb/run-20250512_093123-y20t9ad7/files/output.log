@@ -1,0 +1,33 @@
+Using cuda device
+2025-05-12 09:31:28,379 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-12 09:31:30,069 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-12 09:31:30,497 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-12 09:31:31,767 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+Initial context: "X X X X X X X X X X X X X X X X"
+Number of context words (tokens): 16
+Traceback (most recent call last):
+  File "/home/joaquin_l_calvo/projects/DL2024/deeplearning/deep_learning.py", line 654, in <module>
+    custom_model, custom_preprocess, custom_tokenizer = create_custom_model(device)
+                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/projects/DL2024/deeplearning/deep_learning.py", line 645, in create_custom_model
+    model = CustomCLIP(cfg, CLASS_NAMES, base_model, tokenizer, device)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/projects/DL2024/deeplearning/deep_learning.py", line 596, in __init__
+    self.prompt_learner = PromptLearner(cfg, classnames, clip_model, tokenizer, device)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/projects/DL2024/deeplearning/deep_learning.py", line 539, in __init__
+    embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/venvs/auditect-base/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/venvs/auditect-base/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/venvs/auditect-base/lib/python3.12/site-packages/torch/nn/modules/sparse.py", line 190, in forward
+    return F.embedding(
+           ^^^^^^^^^^^^
+  File "/home/joaquin_l_calvo/venvs/auditect-base/lib/python3.12/site-packages/torch/nn/functional.py", line 2551, in embedding
+    return torch.embedding(weight, input, padding_idx, scale_grad_by_freq, sparse)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu! (when checking argument for argument index in method wrapper_CUDA__index_select)

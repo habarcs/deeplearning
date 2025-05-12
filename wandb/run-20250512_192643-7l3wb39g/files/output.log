@@ -1,0 +1,90 @@
+Using cuda device
+2025-05-12 19:26:48,397 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-12 19:26:51,942 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-12 19:26:55,380 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-12 19:26:57,200 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+Initial context: "X X X X X X X X"
+Number of context words (tokens): 8
+CLIP(
+  (visual): VisionTransformer(
+    (conv1): Conv2d(3, 768, kernel_size=(32, 32), stride=(32, 32), bias=False)
+    (patch_dropout): Identity()
+    (ln_pre): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+    (transformer): Transformer(
+      (resblocks): ModuleList(
+        (0-11): 12 x ResidualAttentionBlock(
+          (ln_1): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+          (attn): MultiheadAttention(
+            (out_proj): NonDynamicallyQuantizableLinear(in_features=768, out_features=768, bias=True)
+          )
+          (ls_1): Identity()
+          (ln_2): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+          (mlp): Sequential(
+            (c_fc): Linear(in_features=768, out_features=3072, bias=True)
+            (gelu): GELU(approximate='none')
+            (c_proj): Linear(in_features=3072, out_features=768, bias=True)
+          )
+          (ls_2): Identity()
+        )
+      )
+    )
+    (ln_post): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+  )
+  (transformer): Transformer(
+    (resblocks): ModuleList(
+      (0-11): 12 x ResidualAttentionBlock(
+        (ln_1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+        (attn): MultiheadAttention(
+          (out_proj): NonDynamicallyQuantizableLinear(in_features=512, out_features=512, bias=True)
+        )
+        (ls_1): Identity()
+        (ln_2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+        (mlp): Sequential(
+          (c_fc): Linear(in_features=512, out_features=2048, bias=True)
+          (gelu): GELU(approximate='none')
+          (c_proj): Linear(in_features=2048, out_features=512, bias=True)
+        )
+        (ls_2): Identity()
+      )
+    )
+  )
+  (token_embedding): Embedding(49408, 512)
+  (ln_final): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+)
+2025-05-12 19:26:57,538 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-12 19:26:57,592 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-12 19:26:57,593 - cocoop_training - INFO - Using cuda device
+2025-05-12 19:26:57,593 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-12 19:26:59,227 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-12 19:26:59,542 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-12 19:26:59,577 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-12 19:26:59,579 - cocoop_training - INFO - Running initial zero-shot evaluation...
+🧠 Zero-shot evaluation on Base Classes: 100%|██████████████████████████████| 20/20 [00:59<00:00,  2.97s/it]
+🧠 Zero-shot evaluation on Novel Classes: 100%|█████████████████████████████| 29/29 [01:29<00:00,  3.07s/it]
+2025-05-12 19:29:28,790 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-12 19:29:28,790 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-12 19:29:28,790 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-12 19:29:28,790 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-12 19:29:28,790 - cocoop_training - INFO - Starting CoCoOp training...
+2025-05-12 19:29:28,790 - cocoop_training - INFO - ==== Starting CoCoOp Training ====
+2025-05-12 19:29:28,791 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}}
+2025-05-12 19:29:28,792 - cocoop_training - INFO - Creating models...
+2025-05-12 19:29:28,792 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-12 19:29:30,605 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-12 19:29:30,804 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-12 19:29:32,173 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+Initial context: "X X X X X X X X"
+Number of context words (tokens): 8
+2025-05-12 19:29:32,406 - cocoop_training - INFO - Loading datasets...
+2025-05-12 19:29:32,406 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-12 19:29:32,426 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-12 19:29:32,430 - cocoop_training - INFO - Creating dataloaders...
+2025-05-12 19:29:32,431 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-12 19:29:32,431 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-12 19:29:32,432 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+Epoch 0 - Base Classes: 100%|███████████████████████████████████████████████| 20/20 [00:58<00:00,  2.92s/it]
+Epoch 0 - Novel Classes: 100%|██████████████████████████████████████████████| 29/29 [01:21<00:00,  2.80s/it]
+2025-05-12 19:31:53,383 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-12 19:31:53,386 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-12 19:31:53,387 - cocoop_training - INFO - Starting training...
+Train Epoch 1:  13%|███▌                        | 16/127 [36:09<4:09:51, 135.06s/it, loss=nan, avg_loss=nan]

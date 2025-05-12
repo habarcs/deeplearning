@@ -15,12 +15,35 @@ cfg = {
     "base_model": {
         "name": "ViT-B-32",
         "weights": "laion2b_s34b_b79k",
+    },
+    "trainer": {
+        "batch_size": 4,  # 32 is the default batch size for the ViT-B-32 model but it was crashing my local machine
+        "epochs": 3,
+        "lr": 0.002, #test 
+        "weight_decay": 0.05, # test
+        "warmup_epochs": 1, # Possibly we'll need more
+        "patience": 5,
+        "checkpoint_dir": "./checkpoints",
+        "cocoop": {
+            "n_ctx": 8,   # Reduced from 16 to save memory
+            "ctx_init": "", # empty string for random initialization (FOR NOW)
+            "prec": "fp16" # Use fp16 precision to save memory
+        }
+    },
+    "input": {
+        "size": [224, 224]  # Input image size
+    },
+    "data": {
+        "data_dir": "./data",
+        "num_workers": 0,  # Enable parallel data loading when running in cloud, use 2 or 4
+        "pin_memory": False  # Idem
     }
 }
 
 # installing packages, use specific versions
 # !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10
 
+import os
 from collections import OrderedDict
 import re
 import torch
@@ -29,10 +52,36 @@ import open_clip
 from tqdm import tqdm
 import time
 import wandb
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+import numpy as np
+from pathlib import Path
+import logging
 
 """## Initialize wandb"""
 
-wandb_run = wandb.init(entity="mhevizi-unitn", project="Deep learning project", config=cfg)
+# Setup some logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("training.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("cocoop_training")
+
+# Create checkpoint directory
+os.makedirs(cfg["trainer"]["checkpoint_dir"], exist_ok=True)
+
+# Initialize a more complete version of wandb (with configuration)
+wandb_run = wandb.init(
+    entity="mhevizi-unitn", 
+    project="Deep learning project", 
+    config=cfg,
+    name=f"CoCoOp_{cfg['base_model']['name']}_{cfg['trainer']['lr']}",
+    tags=["cocoop", cfg["base_model"]["name"]]
+)
 
 """## Define data loaders; base, novel splits"""
 
@@ -141,24 +190,23 @@ CLASS_NAMES = [
     "blackberry lily",
 ]
 
+# Added space for augmentations
+# Transforms for training (WITH augmentation) and validation/test (WITHOUT augmentation)
+def get_data(data_dir="./data", train_transform=None, test_transform=None):
 
-def get_data(data_dir="./data", transform=None):
-    """Load Flowers102 train, validation and test sets.
-    Args:
-        data_dir (str): Directory where the dataset will be stored.
-        transform (torch.Compose)
-    Returns:
-        tuple: A tuple containing the train, validation, and test sets.
-    """
+    logger.info(f"Loading Flowers102 dataset from {data_dir}")
+    
     train = torchvision.datasets.Flowers102(
-        root=data_dir, split="train", download=True, transform=transform
+        root=data_dir, split="train", download=True, transform=train_transform
     )
     val = torchvision.datasets.Flowers102(
-        root=data_dir, split="val", download=True, transform=transform
+        root=data_dir, split="val", download=True, transform=test_transform
     )
     test = torchvision.datasets.Flowers102(
-        root=data_dir, split="test", download=True, transform=transform
+        root=data_dir, split="test", download=True, transform=test_transform
     )
+    
+    logger.info(f"Dataset loaded: {len(train)} train, {len(val)} val, {len(test)} test")
     return train, val, test
 
 
@@ -262,42 +310,156 @@ def harmonic_mean(base_accuracy, novel_accuracy):
     return hm
 
 
-def train_loop(dataloader, model, loss_fn, optimizer, batch_size):
-    size = len(dataloader.dataset)
-    model.train()
-    for batch, (X, y) in enumerate(dataloader):
-        # Compute prediction and loss
-        pred = model(X)
-        loss = loss_fn(pred, y)
+# train for one epoch
+def train_loop(dataloader,model, optimizer, epoch, device, scheduler=None):
 
-        # Backpropagation
+    model.train()
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    # Progress bar for training
+    progress_bar = tqdm(dataloader, desc=f"Train Epoch {epoch}")
+    
+    for batch_idx, (images, targets) in enumerate(progress_bar):
+        # Move data to device
+        images, targets = images.to(device), targets.to(device)
+        
+        # Zero gradients
+        optimizer.zero_grad()
+        
+        # Forward pass
+        loss = model(images, targets)
+        
+        # Backward pass and optimize
         loss.backward()
         optimizer.step()
-        optimizer.zero_grad()
-
-        wandb_run.log({"train_loss": loss.item()})
-
-        if batch % 100 == 0:
-            loss, current = loss.item(), batch * batch_size + len(X)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+        
+        # Update metrics
+        total_loss += loss.item()
+        
+        # Update progress bar
+        progress_bar.set_postfix({
+            'loss': f"{loss.item():.4f}",
+            'avg_loss': f"{total_loss / (batch_idx + 1):.4f}",
+        })
+        
+        # Log to wandb
+        wandb_run.log({
+            "train_loss": loss.item(),
+            "train_avg_loss": total_loss / (batch_idx + 1),
+            "learning_rate": optimizer.param_groups[0]['lr']
+        })
+    
+    # Step the scheduler if provided
+    if scheduler is not None:
+        scheduler.step()
+    
+    # Return average loss
+    avg_loss = total_loss / len(dataloader)
+    logger.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}")
+    return avg_loss
 
 
 @torch.no_grad()
-def test_loop(dataloader, model, loss_fn):
+def evaluate(model, 
+             dataloader, 
+             device, 
+             epoch, 
+             split="test" #split=test? or split=val? Let's make sure we don't fuck up here, there was a question on this in the forum
+             ):
+
     model.eval()
-    size = len(dataloader.dataset)
-    num_batches = len(dataloader)
-    test_loss, correct = 0, 0
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    # Progress bar
+    progress_bar = tqdm(dataloader, desc=f"{split.capitalize()} Epoch {epoch}")
+    
+    for batch_idx, (images, targets) in enumerate(progress_bar):
+        # Move data to device
+        images, targets = images.to(device), targets.to(device)
+        
+        # Forward pass
+        outputs = model(images)
+        loss = F.cross_entropy(outputs, targets)
+        
+        # Update metrics
+        total_loss += loss.item()
+        _, predicted = outputs.max(1)
+        total += targets.size(0)
+        correct += predicted.eq(targets).sum().item()
+        
+        # Calculate accuracy
+        accuracy = 100. * correct / total
+        
+        # Update progress bar
+        progress_bar.set_postfix({
+            'loss': f"{loss.item():.4f}",
+            'acc': f"{accuracy:.2f}%"
+        })
+    
+    # Calculate final metrics
+    avg_loss = total_loss / len(dataloader)
+    accuracy = correct / total
+    
+    # Log to wandb
+    wandb_run.log({
+        f"{split}_loss": avg_loss,
+        f"{split}_accuracy": accuracy,
+        "epoch": epoch
+    })
+    
+    logger.info(f"Epoch {epoch} - {split.capitalize()} Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
+    return accuracy, avg_loss
 
-    for X, y in dataloader:
-        pred = model(X)
-        test_loss += loss_fn(pred, y).item()
-        correct += (pred.argmax(1) == y).type(torch.float).sum().item()
+# Evaluate model on both base and novel categories and compute harmonic mean
+def eval_with_both_categories(custom_model, base_model, test_base_loader, test_novel_loader, 
+                             base_classes, novel_classes, device, tokenizer, epoch):
 
-    test_loss /= num_batches
-    correct /= size
-    print(f"Test Error: \n Accuracy: {(100 * correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
-    wandb_run.log({"val_acc": correct, "val_loss": test_loss})
+    # Create dataloader for the metrics
+    test_base_dataset = test_base_loader.dataset
+    test_novel_dataset = test_novel_loader.dataset
+    
+    # Evaluate on base and novel categories
+    base_accuracy = eval(
+        model=custom_model if epoch > 0 else base_model,
+        dataset=test_base_dataset,
+        categories=base_classes,
+        batch_size=128,
+        device=device,
+        tokenizer=tokenizer,
+        label=f"Epoch {epoch} - Base Classes"
+    )
+    
+    novel_accuracy = eval(
+        model=custom_model if epoch > 0 else base_model,
+        dataset=test_novel_dataset,
+        categories=novel_classes,
+        batch_size=128,
+        device=device,
+        tokenizer=tokenizer,
+        label=f"Epoch {epoch} - Novel Classes"
+    )
+    
+    # Calculate harmonic mean
+    hm = harmonic_mean(base_accuracy, novel_accuracy)
+    
+    # Log results
+    logger.info(f"Epoch {epoch} - Base Accuracy: {base_accuracy:.4f}, "
+                f"Novel Accuracy: {novel_accuracy:.4f}, "
+                f"Harmonic Mean: {hm:.4f}")
+    
+    # Log to wandb
+    wandb_run.log({
+        "base_accuracy": base_accuracy,
+        "novel_accuracy": novel_accuracy,
+        "harmonic_mean": hm,
+        "epoch": epoch
+    })
+    
+    return base_accuracy, novel_accuracy, hm
 
 
 """## Define model"""
@@ -309,7 +471,7 @@ class TextEncoder(torch.nn.Module):
         self.positional_embedding = clip_model.positional_embedding
         self.ln_final = clip_model.ln_final
         self.text_projection = clip_model.text_projection
-        self.dtype = clip_model.dtype
+        self.dtype = getattr(clip_model, "dtype", torch.float32)
 
     def forward(self, prompts, tokenized_prompts):
         x = prompts + self.positional_embedding.type(self.dtype)
@@ -329,27 +491,27 @@ class PromptLearner(torch.nn.Module):
     def __init__(self, cfg, classnames, clip_model, tokenizer, device):
         super().__init__()
         n_cls = len(classnames)
-        n_ctx = cfg.TRAINER.COCOOP.N_CTX
-        ctx_init = cfg.TRAINER.COCOOP.CTX_INIT
-        dtype = clip_model.dtype
+        n_ctx = cfg["trainer"]["cocoop"]["n_ctx"]
+        ctx_init = cfg["trainer"]["cocoop"]["ctx_init"]
+        dtype = getattr(clip_model, "dtype", torch.float32)
         ctx_dim = clip_model.ln_final.weight.shape[0]
         vis_dim = clip_model.visual.output_dim
-        clip_imsize = clip_model.visual.input_resolution
-        cfg_imsize = cfg.INPUT.SIZE[0]
+        clip_imsize = getattr(clip_model.visual, "input_resolution", 224)
+        cfg_imsize = cfg["input"]["size"][0]
         assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
 
         if ctx_init:
             # use given words to initialize context vectors
             ctx_init = ctx_init.replace("_", " ")
             n_ctx = len(ctx_init.split(" "))
-            prompt = tokenizer(ctx_init)
+            prompt = tokenizer(ctx_init).to(device)
             with torch.no_grad():
                 embedding = clip_model.token_embedding(prompt).type(dtype)
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
             # random initialization
-            ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
+            ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype, device=device)
             torch.nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
 
@@ -362,16 +524,18 @@ class PromptLearner(torch.nn.Module):
             ("linear1", torch.nn.Linear(vis_dim, vis_dim // 16)),
             ("relu", torch.nn.ReLU(inplace=True)),
             ("linear2", torch.nn.Linear(vis_dim // 16, ctx_dim))
-        ]))
+        ])).to(device)
         
-        if cfg.TRAINER.COCOOP.PREC == "fp16":
+        if cfg["trainer"]["cocoop"]["prec"] == "fp16":
             self.meta_net.half()
 
         classnames = [name.replace("_", " ") for name in classnames]
-        name_lens = [len(clip_model.encode(name)) for name in classnames]
+        # Use tokenizer to encode classnames safely
+        name_lens = [len(tokenizer(name)) for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
 
-        tokenized_prompts = torch.cat([tokenizer(p) for p in prompts])  # (n_cls, n_tkn)
+        # Move tokenized prompts to the correct device
+        tokenized_prompts = torch.cat([tokenizer(p) for p in prompts]).to(device)  # (n_cls, n_tkn)
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
 
@@ -411,6 +575,11 @@ class PromptLearner(torch.nn.Module):
         prefix = self.token_prefix
         suffix = self.token_suffix
         ctx = self.ctx                     # (n_ctx, ctx_dim)
+        
+        # Ensure consistent precision between meta_net and im_features (this caused me an error)
+        if self.meta_net[0].weight.dtype != im_features.dtype:
+            im_features = im_features.to(self.meta_net[0].weight.dtype)
+            
         bias = self.meta_net(im_features)  # (batch, ctx_dim)
         bias = bias.unsqueeze(1)           # (batch, 1, ctx_dim)
         ctx = ctx.unsqueeze(0)             # (1, n_ctx, ctx_dim)
@@ -430,21 +599,27 @@ class PromptLearner(torch.nn.Module):
 class CustomCLIP(torch.nn.Module):
     def __init__(self, cfg, classnames, clip_model, tokenizer, device):
         super().__init__()
-        self.prompt_learner = PromptLearner(cfg["prompt_learner"], classnames, clip_model, device)
+        self.prompt_learner = PromptLearner(cfg, classnames, clip_model, tokenizer, device) #don't we need this tokenizer here?
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(clip_model, device)
         self.logit_scale = clip_model.logit_scale
-        self.dtype = clip_model.dtype
+        self.dtype = getattr(clip_model, "dtype", torch.float32)
+        self.device = device
 
     def forward(self, image, label=None):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
+        # Use the default precision for image features
         image_features = self.image_encoder(image.type(self.dtype))
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
-        prompts = self.prompt_learner(image_features)
+        # If meta_net is using half precision, convert image_features to half precision for the prompt learner
+        if getattr(self.prompt_learner, 'meta_net', None) is not None and next(self.prompt_learner.meta_net.parameters()).dtype == torch.float16:
+            prompts = self.prompt_learner(image_features.half())
+        else:
+            prompts = self.prompt_learner(image_features)
         
         logits = []
         for pts_i, imf_i in zip(prompts, image_features):
@@ -455,8 +630,10 @@ class CustomCLIP(torch.nn.Module):
         logits = torch.stack(logits)
         
         if self.prompt_learner.training:
-            assert label
-            return torch.nn.functional.cross_entropy(logits, label)
+            if label is not None:
+                return F.cross_entropy(logits, label)
+            else:
+                return logits
         
         return logits
 
@@ -476,8 +653,8 @@ def create_base_model(device):
 
 def create_custom_model(device):
     base_model, preprocess, tokenizer = create_base_model(device)
-    model = CustomCLIP(cfg["cocoop"], CLASS_NAMES, base_model, tokenizer, device)
-    return model, preprocess
+    model = CustomCLIP(cfg, CLASS_NAMES, base_model, tokenizer, device)
+    return model, preprocess, tokenizer #adding tokenizer in line with "self.prompt_learner" definiton
 
 """## Initialize model"""
 
@@ -485,15 +662,27 @@ device = torch.accelerator.current_accelerator().type if torch.accelerator.is_av
 print(f"Using {device} device")
 
 base_model, base_preprocess, base_tokenizer = create_base_model(device)
-custom_model, custom_preprocess = create_custom_model(device)
+custom_model, custom_preprocess, custom_tokenizer = create_custom_model(device)
 print(base_model)
 
 """# Load and prepare data
 
 """
 
+# Create data augmentation for training 
+# TO DO: Explore better augmentations, this is just boiler-plate 
+train_transform = torchvision.transforms.Compose([
+    torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+    torchvision.transforms.RandomHorizontalFlip(),
+    torchvision.transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+    base_preprocess
+])
+
 # get the three datasets
-train_set, val_set, test_set = get_data(transform=base_preprocess)
+train_set, val_set, test_set = get_data(
+    train_transform=train_transform,  # Apply augmentations to training set
+    test_transform=base_preprocess    # Only basic preprocessing for val/test
+)
 
 # split classes into base and novel
 base_classes, novel_classes = base_novel_categories(train_set)
@@ -505,31 +694,411 @@ test_base, test_novel = split_data(test_set, base_classes)
 
 """## Train model"""
 
-### here will be the training and testing loop defined
+# Define optimizer and LR scheduler.
+def get_optimizer_and_scheduler(model, cfg):
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=cfg["trainer"]["lr"],
+        weight_decay=cfg["trainer"]["weight_decay"]
+    )
+    
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=cfg["trainer"]["epochs"],
+        eta_min=1e-6
+    )
+    
+    # Use warmup
+    if cfg["trainer"]["warmup_epochs"] > 0:
+        scheduler = torch.optim.lr_scheduler.LinearLR( # TO DO: Explore better warmups
+            optimizer, 
+            start_factor=0.01,
+            end_factor=1.0,
+            total_iters=cfg["trainer"]["warmup_epochs"]
+        )
+    
+    return optimizer, scheduler
+
+
+# Create PyTorch DataLoaders for training and evaluation + test_base, and test_novel.
+def create_data_loaders(train_dataset,
+                        val_dataset, 
+                        test_base_dataset, 
+                        test_novel_dataset, 
+                        batch_size, 
+                        num_workers=4, 
+                        pin_memory=True):
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=True
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory
+    )
+    
+    test_base_loader = DataLoader(
+        test_base_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory
+    )
+    
+    test_novel_loader = DataLoader(
+        test_novel_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory
+    )
+    
+    logger.info(f"Created dataloaders with batch size {batch_size}")
+    return train_loader, val_loader, test_base_loader, test_novel_loader
+
+
+def save_checkpoint(model, 
+                    optimizer, 
+                    scheduler, 
+                    epoch, 
+                    accuracy, 
+                    best_acc, 
+                    checkpoint_dir, 
+                    is_best=False):
+
+    checkpoint = {
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'scheduler': scheduler.state_dict() if scheduler else None,
+        'epoch': epoch,
+        'accuracy': accuracy,
+        'best_accuracy': best_acc
+    }
+    
+    checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch}.pth')
+    torch.save(checkpoint, checkpoint_path)
+    logger.info(f"Saved checkpoint at {checkpoint_path}")
+    
+    if is_best:
+        best_path = os.path.join(checkpoint_dir, 'model_best.pth')
+        torch.save(checkpoint, best_path)
+        logger.info(f"Saved best model with accuracy {accuracy:.4f} at {best_path}")
+
+
+def load_checkpoint(model, optimizer, scheduler, checkpoint_path, device):
+    try:
+        logger.info(f"Loading checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        
+        model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        
+        if scheduler and checkpoint['scheduler']:
+            scheduler.load_state_dict(checkpoint['scheduler'])
+        
+        epoch = checkpoint['epoch']
+        best_accuracy = checkpoint.get('best_accuracy', 0.0)
+        
+        logger.info(f"Loaded checkpoint from epoch {epoch} with accuracy {checkpoint.get('accuracy', 0.0):.4f}")
+        return epoch, best_accuracy
+    except Exception as e:
+        logger.error(f"Error loading checkpoint: {e}")
+        return 0, 0.0
+
+
+# Main training function for CoCoOp model, receives a config dict and returns best accuracies
+def train_cocoop(cfg, device):
+
+    logger.info("==== Starting CoCoOp Training ====")
+    logger.info(f"Config: {cfg}")
+    
+    # Set random seed for reproducibility
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
+    
+    # Create models
+    logger.info("Creating models...")
+    base_model, base_preprocess, tokenizer = create_base_model(device)
+    custom_model, _, _ = create_custom_model(device)
+    custom_model = custom_model.to(device)
+    
+    # Create data augmentation for training
+    train_transform = torchvision.transforms.Compose([ # TO DO: Explore better augmentations
+        torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+        torchvision.transforms.RandomHorizontalFlip(),
+        torchvision.transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+        base_preprocess
+    ])
+    
+    # Get datasets with transforms
+    logger.info("Loading datasets...")
+    train_set, val_set, test_set = get_data(
+        data_dir=cfg["data"]["data_dir"],
+        train_transform=train_transform,
+        test_transform=base_preprocess
+    )
+    
+    # Split base and novel classes
+    base_classes, novel_classes = base_novel_categories(train_set)
+    
+    # Split datasets
+    train_base, _ = split_data(train_set, base_classes)
+    val_base, _ = split_data(val_set, base_classes)
+    test_base, test_novel = split_data(test_set, base_classes)
+    
+    # Create dataloaders
+    logger.info("Creating dataloaders...")
+    train_loader, val_loader, test_base_loader, test_novel_loader = create_data_loaders(
+        train_base, val_base, test_base, test_novel,
+        batch_size=cfg["trainer"]["batch_size"],
+        num_workers=cfg["data"]["num_workers"],
+        pin_memory=cfg["data"]["pin_memory"]
+    )
+    
+    # Create optimizer and scheduler
+    logger.info("Setting up optimizer and scheduler...")
+    optimizer, scheduler = get_optimizer_and_scheduler(custom_model, cfg)
+    
+    # Training setup
+    start_epoch = 0
+    best_accuracy = 0.0
+    best_base_acc = 0.0
+    best_novel_acc = 0.0
+    best_hm = 0.0
+    patience_counter = 0
+    
+    # Check for resume training
+    checkpoint_path = os.path.join(cfg["trainer"]["checkpoint_dir"], "model_best.pth")
+    if os.path.exists(checkpoint_path):
+        logger.info(f"Found checkpoint at {checkpoint_path}, resuming training...")
+        start_epoch, best_accuracy = load_checkpoint(
+            custom_model, optimizer, scheduler, checkpoint_path, device
+        )
+        start_epoch += 1  # Start from the next epoch
+    
+    # Evaluate zero-shot performance of the base model (as a baseline, before any training)
+    logger.info("Evaluating zero-shot performance of base model...")
+    base_zero_shot_acc, novel_zero_shot_acc, zero_shot_hm = eval_with_both_categories(
+        custom_model=custom_model,
+        base_model=base_model,
+        test_base_loader=test_base_loader,
+        test_novel_loader=test_novel_loader,
+        base_classes=base_classes,
+        novel_classes=novel_classes,
+        device=device,
+        tokenizer=tokenizer,
+        epoch=0
+    )
+    
+    logger.info(f"Zero-shot: Base Acc={base_zero_shot_acc:.4f}, "
+                f"Novel Acc={novel_zero_shot_acc:.4f}, "
+                f"HM={zero_shot_hm:.4f}")
+    
+    # Training loop
+    logger.info("Starting training...")
+    for epoch in range(start_epoch, cfg["trainer"]["epochs"]):
+        try:
+            # Train for one epoch
+            train_loss = train_loop(
+                dataloader=train_loader,
+                model=custom_model,
+                optimizer=optimizer,
+                epoch=epoch + 1,
+                device=device,
+                scheduler=scheduler
+            )
+            
+            # Evaluate on validation set
+            val_acc, val_loss = evaluate(
+                model=custom_model,
+                dataloader=val_loader,
+                device=device,
+                epoch=epoch + 1,
+                split="val"
+            )
+            
+            # Evaluate on test sets (base and novel)
+            base_acc, novel_acc, hm = eval_with_both_categories(
+                custom_model=custom_model,
+                base_model=base_model,
+                test_base_loader=test_base_loader,
+                test_novel_loader=test_novel_loader,
+                base_classes=base_classes,
+                novel_classes=novel_classes,
+                device=device,
+                tokenizer=tokenizer,
+                epoch=epoch + 1
+            )
+            
+            # Check if this is the best model (by harmonic mean)
+            is_best = hm > best_hm
+            if is_best:
+                best_hm = hm
+                best_base_acc = base_acc
+                best_novel_acc = novel_acc
+                patience_counter = 0
+            else:
+                patience_counter += 1
+            
+            # Save checkpoints
+            save_checkpoint(
+                model=custom_model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                epoch=epoch + 1,
+                accuracy=hm,
+                best_acc=best_hm,
+                checkpoint_dir=cfg["trainer"]["checkpoint_dir"],
+                is_best=is_best
+            )
+            
+            # Early stopping
+            if patience_counter >= cfg["trainer"]["patience"]:
+                logger.info(f"Early stopping triggered after {patience_counter} epochs without improvement")
+                break
+            
+        except Exception as e:
+            logger.error(f"Error during training: {e}")
+            # Save emergency checkpoint
+            save_checkpoint(
+                model=custom_model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                epoch=epoch + 1,
+                accuracy=best_hm,
+                best_acc=best_hm,
+                checkpoint_dir=cfg["trainer"]["checkpoint_dir"],
+                is_best=False
+            )
+            raise e
+    
+    # Load best model for final evaluation
+    best_model_path = os.path.join(cfg["trainer"]["checkpoint_dir"], "model_best.pth")
+    if os.path.exists(best_model_path):
+        _, _ = load_checkpoint(custom_model, optimizer, None, best_model_path, device)
+    
+    # Final evaluation
+    logger.info("==== Final Evaluation ====")
+    final_base_acc, final_novel_acc, final_hm = eval_with_both_categories(
+        custom_model=custom_model,
+        base_model=base_model,
+        test_base_loader=test_base_loader,
+        test_novel_loader=test_novel_loader,
+        base_classes=base_classes,
+        novel_classes=novel_classes,
+        device=device,
+        tokenizer=tokenizer,
+        epoch=cfg["trainer"]["epochs"] + 1
+    )
+    
+    logger.info(f"Final: Base Acc={final_base_acc:.4f}, "
+                f"Novel Acc={final_novel_acc:.4f}, "
+                f"HM={final_hm:.4f}")
+    
+    # Log improvement over zero-shot
+    logger.info(f"Improvement over zero-shot: "
+                f"Base: {(final_base_acc - base_zero_shot_acc) * 100:.2f}%, "
+                f"Novel: {(final_novel_acc - novel_zero_shot_acc) * 100:.2f}%, "
+                f"HM: {(final_hm - zero_shot_hm) * 100:.2f}%")
+    
+    # Return best results
+    return best_base_acc, best_novel_acc, best_hm
 
 """## Evaluate zero shot accuracy"""
 
-base_accuracy = eval(
-    model=base_model,
-    dataset=test_base,
-    categories=base_classes,
-    batch_size=128,
-    device=device,
-    tokenizer=base_tokenizer,
-    label="🧠 Zero-shot evaluation on Base Classes",
-)
-novel_accuracy = eval(
-    model=base_model,
-    dataset=test_novel,
-    categories=novel_classes,
-    batch_size=128,
-    device=device,
-    tokenizer=base_tokenizer,
-    label="🧠 Zero-shot evaluation on Novel Classes",
-)
+def main():
+    """Main function that ties everything together."""
+    try:
+        # Set device
+        device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+        logger.info(f"Using {device} device")
+        
+        # Initial zero-shot evaluation with the base model
+        base_model, base_preprocess, base_tokenizer = create_base_model(device)
+        
+        # Create data augmentation for training
+        train_transform = torchvision.transforms.Compose([
+            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+            torchvision.transforms.RandomHorizontalFlip(),
+            torchvision.transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+            base_preprocess
+        ])
+        
+        # Get datasets
+        train_set, val_set, test_set = get_data(
+            data_dir=cfg["data"]["data_dir"], 
+            train_transform=train_transform,  # Apply augmentations to training set
+            test_transform=base_preprocess    # Only basic preprocessing for val/test
+        )
+        
+        # Split classes
+        base_classes, novel_classes = base_novel_categories(train_set)
+        
+        # Split datasets
+        train_base, _ = split_data(train_set, base_classes)
+        val_base, _ = split_data(val_set, base_classes)
+        test_base, test_novel = split_data(test_set, base_classes)
+        
+        # Initial zero-shot evaluation (this was previously set, I've just moved it a bit)
+        logger.info("Running initial zero-shot evaluation...")
+        base_accuracy = eval(
+            model=base_model,
+            dataset=test_base,
+            categories=base_classes,
+            batch_size=128,
+            device=device,
+            tokenizer=base_tokenizer,
+            label="🧠 Zero-shot evaluation on Base Classes",
+        )
+        novel_accuracy = eval(
+            model=base_model,
+            dataset=test_novel,
+            categories=novel_classes,
+            batch_size=128,
+            device=device,
+            tokenizer=base_tokenizer,
+            label="🧠 Zero-shot evaluation on Novel Classes",
+        )
+        
+        hm = harmonic_mean(base_accuracy, novel_accuracy)
+        
+        logger.info("==== Zero-shot Evaluation Results ====")
+        logger.info(f"🔍 Base classes accuracy: {base_accuracy * 100:.2f}%")
+        logger.info(f"🔍 Novel classes accuracy: {novel_accuracy * 100:.2f}%")
+        logger.info(f"🔍 Harmonic Mean: {hm * 100:.2f}%")
+        
+        # Run training
+        logger.info("Starting CoCoOp training...")
+        best_base_acc, best_novel_acc, best_hm = train_cocoop(cfg, device)
+        
+        # Final comparison
+        logger.info("==== Improvement Summary ====")
+        logger.info(f"Base classes: {base_accuracy * 100:.2f}% -> {best_base_acc * 100:.2f}% "
+                    f"(+{(best_base_acc - base_accuracy) * 100:.2f}%)")
+        logger.info(f"Novel classes: {novel_accuracy * 100:.2f}% -> {best_novel_acc * 100:.2f}% "
+                    f"(+{(best_novel_acc - novel_accuracy) * 100:.2f}%)")
+        logger.info(f"Harmonic Mean: {hm * 100:.2f}% -> {best_hm * 100:.2f}% "
+                    f"(+{(best_hm - hm) * 100:.2f}%)")
+        
+    except Exception as e:
+        logger.error(f"Error in main execution: {e}")
+        raise e
+    finally:
+        # Cleanup
+        logger.info("Finishing wandb run...")
+        wandb_run.finish()
 
-print()
-print(f"🔍 Base classes accuracy: {base_accuracy * 100:.2f}%")
-print(f"🔍 Novel classes accuracy: {novel_accuracy * 100:.2f}%")
-print(f"🔍 Harmonic Mean: {harmonic_mean(base_accuracy, novel_accuracy) * 100:.2f}%")
-wandb_run.finish()
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,8 @@
+{"time":"2025-05-12T19:26:43.144007907+02:00","level":"INFO","msg":"stream: starting","core version":"0.19.10","symlink path":"/home/joaquin_l_calvo/projects/DL2024/deeplearning/wandb/run-20250512_192643-7l3wb39g/logs/debug-core.log"}
+{"time":"2025-05-12T19:26:45.658727769+02:00","level":"INFO","msg":"created new stream","id":"7l3wb39g"}
+{"time":"2025-05-12T19:26:45.658838573+02:00","level":"INFO","msg":"stream: started","id":"7l3wb39g"}
+{"time":"2025-05-12T19:26:45.658900823+02:00","level":"INFO","msg":"writer: Do: started","stream_id":"7l3wb39g"}
+{"time":"2025-05-12T19:26:45.659328524+02:00","level":"INFO","msg":"handler: started","stream_id":"7l3wb39g"}
+{"time":"2025-05-12T19:26:45.659398518+02:00","level":"INFO","msg":"sender: started","stream_id":"7l3wb39g"}
+{"time":"2025-05-12T19:26:46.092447002+02:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-05-12T19:46:15.633498576+02:00","level":"INFO","msg":"api: retrying error","error":"Post \"https://api.wandb.ai/files/mhevizi-unitn/Deep%20learning%20project/7l3wb39g/file_stream\": dial tcp: lookup api.wandb.ai on 10.255.255.254:53: read udp 10.255.255.254:55433->10.255.255.254:53: i/o timeout"}
