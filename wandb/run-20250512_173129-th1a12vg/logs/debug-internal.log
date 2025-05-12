@@ -1,7 +1,0 @@
-{"time":"2025-05-12T17:31:29.693550044+02:00","level":"INFO","msg":"stream: starting","core version":"0.19.10","symlink path":"/home/joaquin_l_calvo/projects/DL2024/deeplearning/wandb/run-20250512_173129-th1a12vg/logs/debug-core.log"}
-{"time":"2025-05-12T17:31:32.941574851+02:00","level":"INFO","msg":"created new stream","id":"th1a12vg"}
-{"time":"2025-05-12T17:31:32.941622413+02:00","level":"INFO","msg":"stream: started","id":"th1a12vg"}
-{"time":"2025-05-12T17:31:32.941710776+02:00","level":"INFO","msg":"writer: Do: started","stream_id":"th1a12vg"}
-{"time":"2025-05-12T17:31:32.941797845+02:00","level":"INFO","msg":"sender: started","stream_id":"th1a12vg"}
-{"time":"2025-05-12T17:31:32.941918261+02:00","level":"INFO","msg":"handler: started","stream_id":"th1a12vg"}
-{"time":"2025-05-12T17:31:33.362424185+02:00","level":"INFO","msg":"Starting system monitor"}
