@@ -11,28 +11,36 @@ Here comes important information about the project**...**
 """
 
 # configuration
-cfg = {
-    "base_model": {
-        "name": "ViT-B-32",
-        "weights": "laion2b_s34b_b79k",
-    }
+global_cfg = {
+    "COCOOP": {
+        "base_model": {
+            "name": "ViT-B-32",
+            "weights": "laion2b_s34b_b79k",
+        },
+        "prompt_learner": {},
+        "text_encoder": {},
+    },
+    "training": {
+        "num_epochs": 10,
+        "lr": 1e-3,
+        "batch_size": 24,
+    },
 }
 
 # installing packages, use specific versions
-# !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10
+# !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10 scipy==1.15.3
 
+from calendar import EPOCH
 from collections import OrderedDict
-import re
 import torch
 import torchvision
 import open_clip
 from tqdm import tqdm
-import time
 import wandb
 
 """## Initialize wandb"""
 
-wandb_run = wandb.init(entity="mhevizi-unitn", project="Deep learning project", config=cfg)
+wandb_run = wandb.init(entity="mhevizi-unitn", project="Deep learning project", config=global_cfg)
 
 """## Define data loaders; base, novel splits"""
 
@@ -150,15 +158,9 @@ def get_data(data_dir="./data", transform=None):
     Returns:
         tuple: A tuple containing the train, validation, and test sets.
     """
-    train = torchvision.datasets.Flowers102(
-        root=data_dir, split="train", download=True, transform=transform
-    )
-    val = torchvision.datasets.Flowers102(
-        root=data_dir, split="val", download=True, transform=transform
-    )
-    test = torchvision.datasets.Flowers102(
-        root=data_dir, split="test", download=True, transform=transform
-    )
+    train = torchvision.datasets.Flowers102(root=data_dir, split="train", download=True, transform=transform)
+    val = torchvision.datasets.Flowers102(root=data_dir, split="val", download=True, transform=transform)
+    test = torchvision.datasets.Flowers102(root=data_dir, split="test", download=True, transform=transform)
     return train, val, test
 
 
@@ -205,6 +207,12 @@ def split_data(dataset, base_classes):
 
 
 @torch.no_grad()
+def eval_custom_model(model, dataset, categories, batch_size, device, tokenizer, label=""):
+    "TODO finish this, it should look like the test loop"
+    pass
+
+
+@torch.no_grad()
 def eval(model, dataset, categories, batch_size, device, tokenizer, label=""):
     model.eval()
 
@@ -213,9 +221,7 @@ def eval(model, dataset, categories, batch_size, device, tokenizer, label=""):
 
     # here we apply the standard CLIP template used for oxford flowers to all categories
     # and immediately tokenize each sentence (convert natural language into numbers - feel free to print the text input to inspect them)
-    text_inputs = tokenizer(
-        [f"a photo of a {CLASS_NAMES[c]}, a type of flower." for c in categories]
-    ).to(device)
+    text_inputs = tokenizer([f"a photo of a {CLASS_NAMES[c]}, a type of flower." for c in categories]).to(device)
 
     # we can encode the text features once as they are shared for all images
     # therefore we do it outside the evaluation loop
@@ -224,9 +230,7 @@ def eval(model, dataset, categories, batch_size, device, tokenizer, label=""):
     text_features /= text_features.norm(dim=-1, keepdim=True)
 
     # simple dataloader creation
-    dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=2
-    )
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=2)
 
     # here we store the number of correct predictions we will make
     correct_predictions = 0
@@ -302,21 +306,21 @@ def test_loop(dataloader, model, loss_fn):
 
 """## Define model"""
 
+
 class TextEncoder(torch.nn.Module):
-    def __init__(self, clip_model, device):
+    def __init__(self, cfg, clip_model, device):
         super().__init__()
         self.transformer = clip_model.transformer
         self.positional_embedding = clip_model.positional_embedding
         self.ln_final = clip_model.ln_final
         self.text_projection = clip_model.text_projection
-        self.dtype = clip_model.dtype
 
     def forward(self, prompts, tokenized_prompts):
-        x = prompts + self.positional_embedding.type(self.dtype)
+        x = prompts + self.positional_embedding
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
-        x = self.ln_final(x).type(self.dtype)
+        x = self.ln_final(x)
 
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
@@ -329,14 +333,10 @@ class PromptLearner(torch.nn.Module):
     def __init__(self, cfg, classnames, clip_model, tokenizer, device):
         super().__init__()
         n_cls = len(classnames)
-        n_ctx = cfg.TRAINER.COCOOP.N_CTX
-        ctx_init = cfg.TRAINER.COCOOP.CTX_INIT
-        dtype = clip_model.dtype
+        n_ctx = cfg.get("n_ctx", 16)
+        ctx_init = cfg.get("ctx_init", None)
         ctx_dim = clip_model.ln_final.weight.shape[0]
         vis_dim = clip_model.visual.output_dim
-        clip_imsize = clip_model.visual.input_resolution
-        cfg_imsize = cfg.INPUT.SIZE[0]
-        assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
 
         if ctx_init:
             # use given words to initialize context vectors
@@ -344,12 +344,12 @@ class PromptLearner(torch.nn.Module):
             n_ctx = len(ctx_init.split(" "))
             prompt = tokenizer(ctx_init)
             with torch.no_grad():
-                embedding = clip_model.token_embedding(prompt).type(dtype)
+                embedding = clip_model.token_embedding(prompt)
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
             # random initialization
-            ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
+            ctx_vectors = torch.empty(n_ctx, ctx_dim)
             torch.nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
 
@@ -358,22 +358,23 @@ class PromptLearner(torch.nn.Module):
 
         self.ctx = torch.nn.Parameter(ctx_vectors)
 
-        self.meta_net = torch.nn.Sequential(OrderedDict([
-            ("linear1", torch.nn.Linear(vis_dim, vis_dim // 16)),
-            ("relu", torch.nn.ReLU(inplace=True)),
-            ("linear2", torch.nn.Linear(vis_dim // 16, ctx_dim))
-        ]))
-        
-        if cfg.TRAINER.COCOOP.PREC == "fp16":
-            self.meta_net.half()
+        self.meta_net = torch.nn.Sequential(
+            OrderedDict(
+                [
+                    ("linear1", torch.nn.Linear(vis_dim, vis_dim // 16)),
+                    ("relu", torch.nn.ReLU(inplace=True)),
+                    ("linear2", torch.nn.Linear(vis_dim // 16, ctx_dim)),
+                ]
+            )
+        )
 
         classnames = [name.replace("_", " ") for name in classnames]
-        name_lens = [len(clip_model.encode(name)) for name in classnames]
+        name_lens = [len(clip_model.encode_text(tokenizer(name))) for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
 
         tokenized_prompts = torch.cat([tokenizer(p) for p in prompts])  # (n_cls, n_tkn)
         with torch.no_grad():
-            embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
+            embedding = clip_model.token_embedding(tokenized_prompts)
 
         # These token vectors will be saved when in save_model(),
         # but they should be ignored in load_model() as we want to use
@@ -385,7 +386,7 @@ class PromptLearner(torch.nn.Module):
         self.n_ctx = n_ctx
         self.tokenized_prompts = tokenized_prompts  # torch.Tensor
         self.name_lens = name_lens
-    
+
     def construct_prompts(self, ctx, prefix, suffix, label=None):
         # dim0 is either batch_size (during training) or n_cls (during testing)
         # ctx: context tokens, with shape of (dim0, n_ctx, ctx_dim)
@@ -399,7 +400,7 @@ class PromptLearner(torch.nn.Module):
         prompts = torch.cat(
             [
                 prefix,  # (dim0, 1, dim)
-                ctx,     # (dim0, n_ctx, dim)
+                ctx,  # (dim0, n_ctx, dim)
                 suffix,  # (dim0, *, dim)
             ],
             dim=1,
@@ -410,12 +411,12 @@ class PromptLearner(torch.nn.Module):
     def forward(self, im_features):
         prefix = self.token_prefix
         suffix = self.token_suffix
-        ctx = self.ctx                     # (n_ctx, ctx_dim)
+        ctx = self.ctx  # (n_ctx, ctx_dim)
         bias = self.meta_net(im_features)  # (batch, ctx_dim)
-        bias = bias.unsqueeze(1)           # (batch, 1, ctx_dim)
-        ctx = ctx.unsqueeze(0)             # (1, n_ctx, ctx_dim)
-        ctx_shifted = ctx + bias           # (batch, n_ctx, ctx_dim)
-        
+        bias = bias.unsqueeze(1)  # (batch, 1, ctx_dim)
+        ctx = ctx.unsqueeze(0)  # (1, n_ctx, ctx_dim)
+        ctx_shifted = ctx + bias  # (batch, n_ctx, ctx_dim)
+
         # Use instance-conditioned context tokens for all classes
         prompts = []
         for ctx_shifted_i in ctx_shifted:
@@ -423,29 +424,28 @@ class PromptLearner(torch.nn.Module):
             pts_i = self.construct_prompts(ctx_i, prefix, suffix)  # (n_cls, n_tkn, ctx_dim)
             prompts.append(pts_i)
         prompts = torch.stack(prompts)
-        
+
         return prompts
 
 
 class CustomCLIP(torch.nn.Module):
     def __init__(self, cfg, classnames, clip_model, tokenizer, device):
         super().__init__()
-        self.prompt_learner = PromptLearner(cfg["prompt_learner"], classnames, clip_model, device)
+        self.prompt_learner = PromptLearner(cfg["prompt_learner"], classnames, clip_model, tokenizer, device)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
-        self.text_encoder = TextEncoder(clip_model, device)
+        self.text_encoder = TextEncoder(cfg["text_encoder"], clip_model, device)
         self.logit_scale = clip_model.logit_scale
-        self.dtype = clip_model.dtype
 
     def forward(self, image, label=None):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
-        image_features = self.image_encoder(image.type(self.dtype))
+        image_features = self.image_encoder(image)
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
         prompts = self.prompt_learner(image_features)
-        
+
         logits = []
         for pts_i, imf_i in zip(prompts, image_features):
             text_features = self.text_encoder(pts_i, tokenized_prompts)
@@ -453,44 +453,43 @@ class CustomCLIP(torch.nn.Module):
             l_i = logit_scale * imf_i @ text_features.t()
             logits.append(l_i)
         logits = torch.stack(logits)
-        
+
         if self.prompt_learner.training:
             assert label
             return torch.nn.functional.cross_entropy(logits, label)
-        
+
         return logits
 
 
-def create_base_model(device):
+def create_base_model(cfg, device):
     result = open_clip.create_model_from_pretrained(
-        model_name=cfg["base_model"]["name"],
-        pretrained=cfg["base_model"]["weights"],
+        model_name=cfg["name"],
+        pretrained=cfg["weights"],
         device=device,
         return_transform=True,
     )
     assert isinstance(result, tuple)
     model, preprocess = result
-    tokenizer = open_clip.get_tokenizer(cfg["base_model"]["name"])
+    tokenizer = open_clip.get_tokenizer(cfg["name"])
     return model, preprocess, tokenizer
 
 
-def create_custom_model(device):
-    base_model, preprocess, tokenizer = create_base_model(device)
-    model = CustomCLIP(cfg["cocoop"], CLASS_NAMES, base_model, tokenizer, device)
+def create_custom_model(cfg, device):
+    base_model, preprocess, tokenizer = create_base_model(cfg["base_model"], device)
+    model = CustomCLIP(cfg, CLASS_NAMES, base_model, tokenizer, device)
     return model, preprocess
+
 
 """## Initialize model"""
 
 device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
 print(f"Using {device} device")
 
-base_model, base_preprocess, base_tokenizer = create_base_model(device)
-custom_model, custom_preprocess = create_custom_model(device)
+base_model, base_preprocess, base_tokenizer = create_base_model(global_cfg["COCOOP"]["base_model"], device)
+custom_model, custom_preprocess = create_custom_model(global_cfg["COCOOP"], device)
 print(base_model)
 
-"""# Load and prepare data
-
-"""
+"""## Load and prepare data"""
 
 # get the three datasets
 train_set, val_set, test_set = get_data(transform=base_preprocess)
@@ -503,9 +502,27 @@ train_base, _ = split_data(train_set, base_classes)
 val_base, _ = split_data(val_set, base_classes)
 test_base, test_novel = split_data(test_set, base_classes)
 
-"""## Train model"""
 
-### here will be the training and testing loop defined
+"""## Loss function and optimizer"""
+loss_fn = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.SGD(custom_model.parameters(), lr=global_cfg["training"]["lr"])
+train_base_loader = torch.utils.data.DataLoader(
+    train_base,
+    global_cfg["training"]["batch_size"],
+)
+
+val_base_loader = torch.utils.data.DataLoader(
+    val_base,
+    global_cfg["training"]["batch_size"],
+)
+
+"""## Train model"""
+for epoch in range(global_cfg["training"]["num_epochs"]):
+    print(f"Epoch {epoch + 1}\n---------------------")
+    train_loop(train_base_loader, custom_model, loss_fn, optimizer, global_cfg["training"]["batch_size"])
+    test_loop(val_base_loader, custom_model, loss_fn)
+    # TODO maybe do early stopping based on validation?
+    # TODO add module saving and loading?
 
 """## Evaluate zero shot accuracy"""
 
