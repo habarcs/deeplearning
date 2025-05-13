@@ -23,6 +23,7 @@ CFG = {
         },
         "text_encoder": {},
     },
+    "wandb": True,
     "training": {
         "resume_id": None,
         "resume_from": "best",
@@ -56,7 +57,7 @@ WANDB = wandb.init(
     config=CFG,
     name="CoCoOp_" + RUN_ID,
     tags=["cocoop", CFG["COCOOP"]["base_model"]["name"]],
-)
+) if CFG["wandb"] else wandb.init(mode="disabled")
 
 DEVICE = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
 LOGGER.info(f"Using {DEVICE} device")
@@ -421,7 +422,7 @@ class PromptLearner(torch.nn.Module):
         ).to(DEVICE)
 
         classnames = [name.replace("_", " ") for name in classnames]
-        name_lens = [len(clip_model.encode_text(tokenizer(name))) for name in classnames]
+        name_lens = [len(clip_model.encode_text(tokenizer(name).to(DEVICE))) for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
 
         tokenized_prompts = torch.cat([tokenizer(p) for p in prompts]).to(DEVICE)  # (n_cls, n_tkn)
