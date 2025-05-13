@@ -28,10 +28,12 @@ CFG = {
         "resume_from": "best",
         "patience": 5,
         "epochs": 10,
-        "lr": 1e-3,
         "batch_size": 32,
-        "scheduler": {
+        "optimizer": {
+            "lr": 1e-3,
             "weight_decay": 0.05,
+        },
+        "scheduler": {
             "warmup_epochs": 1,
         },
     },
@@ -43,20 +45,17 @@ os.makedirs(RUN_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(RUN_DIR + "training.log"),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler(RUN_DIR + "training.log"), logging.StreamHandler()],
 )
 LOGGER = logging.getLogger("cocoop_training")
 
 WANDB = wandb.init(
-    entity="mhevizi-unitn", 
-    project="Deep learning project", 
+    entity="mhevizi-unitn",
+    project="Deep learning project",
     config=CFG,
     name="CoCoOp_" + RUN_ID,
-    tags=["cocoop", CFG["COCOOP"]["base_model"]["name"]]
+    tags=["cocoop", CFG["COCOOP"]["base_model"]["name"]],
 )
 
 DEVICE = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
@@ -167,19 +166,14 @@ CLASS_NAMES = [
     "blackberry lily",
 ]
 
+
 def get_data(data_dir="./data", train_transform=None, test_transform=None):
     LOGGER.info(f"Loading Flowers102 dataset from {data_dir}")
-    
-    train = torchvision.datasets.Flowers102(
-        root=data_dir, split="train", download=True, transform=train_transform
-    )
-    val = torchvision.datasets.Flowers102(
-        root=data_dir, split="val", download=True, transform=test_transform
-    )
-    test = torchvision.datasets.Flowers102(
-        root=data_dir, split="test", download=True, transform=test_transform
-    )
-    
+
+    train = torchvision.datasets.Flowers102(root=data_dir, split="train", download=True, transform=train_transform)
+    val = torchvision.datasets.Flowers102(root=data_dir, split="val", download=True, transform=test_transform)
+    test = torchvision.datasets.Flowers102(root=data_dir, split="test", download=True, transform=test_transform)
+
     LOGGER.info(f"Dataset loaded: {len(train)} train, {len(val)} val, {len(test)} test")
     return train, val, test
 
@@ -222,36 +216,38 @@ def split_data(dataset, base_classes):
     novel_dataset = torch.utils.data.Subset(dataset, novel_categories_samples)
     return base_dataset, novel_dataset
 
-def create_data_loaders(train_dataset,
-                        val_dataset, 
-                        test_base_dataset, 
-                        test_novel_dataset, 
-                        batch_size, 
-                        ):
+
+def create_data_loaders(
+    train_dataset,
+    val_dataset,
+    test_base_dataset,
+    test_novel_dataset,
+    batch_size,
+):
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
     )
-    
+
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
     )
-    
+
     test_base_loader = DataLoader(
         test_base_dataset,
         batch_size=batch_size,
         shuffle=False,
     )
-    
+
     test_novel_loader = DataLoader(
         test_novel_dataset,
         batch_size=batch_size,
         shuffle=False,
     )
-    
+
     LOGGER.info(f"Created dataloaders with batch size {batch_size}")
     return train_loader, val_loader, test_base_loader, test_novel_loader
 
@@ -264,127 +260,106 @@ def harmonic_mean(base_accuracy, novel_accuracy):
 
 
 @torch.no_grad()
-def evaluate(model, 
-             dataloader, 
-             epoch=0, 
-             split="val"
-             ):
-
+def evaluate(model, dataloader, epoch=0, split="val"):
     model.eval()
     total_loss = 0
     correct = 0
     total = 0
-    
+
     # Progress bar
     progress_bar = tqdm(dataloader, desc=f"{split.capitalize()} Epoch {epoch}")
-    
+
     for batch_idx, (images, targets) in enumerate(progress_bar):
         images, targets = images.to(DEVICE), targets.to(DEVICE)
-        
+
         outputs = model(images)
         loss = F.cross_entropy(outputs, targets)
-        
+
         total_loss += loss.item()
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
-        
-        accuracy = 100. * correct / total
-        
-        progress_bar.set_postfix({
-            'loss': f"{loss.item():.4f}",
-            'acc': f"{accuracy:.2f}%"
-        })
-    
+
+        accuracy = 100.0 * correct / total
+
+        progress_bar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{accuracy:.2f}%"})
+
     avg_loss = total_loss / len(dataloader)
     accuracy = correct / total
 
     if split == "val":
-        WANDB.log({
-            f"{split}_loss": avg_loss,
-            f"{split}_accuracy": accuracy,
-            "epoch": epoch
-        })
-    
+        WANDB.log({f"{split}_loss": avg_loss, f"{split}_accuracy": accuracy, "epoch": epoch})
+
         LOGGER.info(f"Epoch {epoch} - {split.capitalize()} Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
     return accuracy, avg_loss
 
 
-def eval_with_both_categories(custom_model, test_base_loader, test_novel_loader, 
-                             base_classes, novel_classes, epoch):
-
+def eval_with_both_categories(custom_model, test_base_loader, test_novel_loader, base_classes, novel_classes, epoch):
     base_accuracy, _ = evaluate(
         model=custom_model,
         dataloader=test_base_loader,
     )
-    
+
     novel_accuracy, _ = evaluate(
         model=custom_model,
         dataloader=test_novel_loader,
     )
-    
+
     hm = harmonic_mean(base_accuracy, novel_accuracy)
-    
-    LOGGER.info(f"Epoch {epoch} - Base Accuracy: {base_accuracy:.4f}, "
-                f"Novel Accuracy: {novel_accuracy:.4f}, "
-                f"Harmonic Mean: {hm:.4f}")
-    
-    WANDB.log({
-        "base_accuracy": base_accuracy,
-        "novel_accuracy": novel_accuracy,
-        "harmonic_mean": hm,
-        "epoch": epoch
-    })
-    
+
+    LOGGER.info(
+        f"Epoch {epoch} - Base Accuracy: {base_accuracy:.4f}, "
+        f"Novel Accuracy: {novel_accuracy:.4f}, "
+        f"Harmonic Mean: {hm:.4f}"
+    )
+
+    WANDB.log({"base_accuracy": base_accuracy, "novel_accuracy": novel_accuracy, "harmonic_mean": hm, "epoch": epoch})
+
     return base_accuracy, novel_accuracy, hm
 
 
-def save_checkpoint(model, 
-                    optimizer, 
-                    scheduler, 
-                    epoch, 
-                    accuracy, 
-                    best_acc, 
-                    is_best=False):
+def save_checkpoint(model, optimizer, scheduler, epoch, accuracy, best_acc, is_best=False):
     checkpoint = {
-        'model': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'scheduler': scheduler.state_dict() if scheduler else None,
-        'epoch': epoch,
-        'accuracy': accuracy,
-        'best_accuracy': best_acc
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict() if scheduler else None,
+        "epoch": epoch,
+        "accuracy": accuracy,
+        "best_accuracy": best_acc,
     }
-    
+
     checkpoint_dir = RUN_DIR + "checkpoint/"
-    checkpoint_path = checkpoint_dir + 'checkpoint_epoch_{epoch}.pth'
+    checkpoint_path = checkpoint_dir + "checkpoint_epoch_{epoch}.pth"
     torch.save(checkpoint, checkpoint_path)
     LOGGER.info(f"Saved checkpoint at {checkpoint_path}")
-    
+
     if is_best:
-        best_path = os.path.join(checkpoint_dir, 'model_best.pth')
+        best_path = os.path.join(checkpoint_dir, "model_best.pth")
         torch.save(checkpoint, best_path)
         LOGGER.info(f"Saved best model with accuracy {accuracy:.4f} at {best_path}")
 
+
 def load_checkpoint(model, optimizer, scheduler, resume_from="best"):
     checkpoint_dir = RUN_DIR + "checkpoint/"
-    if resume_from=="best":
-        checkpoint_path = checkpoint_dir + 'model_best.pth'
+    if resume_from == "best":
+        checkpoint_path = checkpoint_dir + "model_best.pth"
     else:
-        checkpoint_path = checkpoint_dir + f'checkpoint_epoch_{resume_from}.pth'
+        checkpoint_path = checkpoint_dir + f"checkpoint_epoch_{resume_from}.pth"
     LOGGER.info(f"Loading checkpoint from {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
-    
-    model.load_state_dict(checkpoint['model'])
-    optimizer.load_state_dict(checkpoint['optimizer'])
-    
-    if scheduler and checkpoint['scheduler']:
-        scheduler.load_state_dict(checkpoint['scheduler'])
-    
-    epoch = checkpoint['epoch']
-    best_accuracy = checkpoint.get('best_accuracy', 0.0)
-    
+
+    model.load_state_dict(checkpoint["model"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
+
+    if scheduler and checkpoint["scheduler"]:
+        scheduler.load_state_dict(checkpoint["scheduler"])
+
+    epoch = checkpoint["epoch"]
+    best_accuracy = checkpoint.get("best_accuracy", 0.0)
+
     LOGGER.info(f"Loaded checkpoint from epoch {epoch} with accuracy {checkpoint.get('accuracy', 0.0):.4f}")
     return epoch, best_accuracy
+
 
 class TextEncoder(torch.nn.Module):
     def __init__(self, cfg, clip_model):
@@ -444,7 +419,7 @@ class PromptLearner(torch.nn.Module):
                 ]
             )
         ).to(DEVICE)
-    
+
         classnames = [name.replace("_", " ") for name in classnames]
         name_lens = [len(clip_model.encode_text(tokenizer(name))) for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
@@ -534,7 +509,7 @@ class CustomCLIP(torch.nn.Module):
         if self.prompt_learner.training:
             assert label
             return torch.nn.functional.cross_entropy(logits, label)
-        
+
         return logits
 
 
@@ -558,30 +533,25 @@ def create_custom_model(cfg):
 
 
 def get_optimizer(model, cfg):
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=cfg["lr"],
-        weight_decay=cfg["weight_decay"]
-    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
     return optimizer
-    
+
+
 def get_scheduler(optimizer, cfg):
     if cfg["warmup_epochs"] > 0:
         scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, 
-            start_factor=0.01,
-            end_factor=1.0,
-            total_iters=cfg["warmup_epochs"]
+            optimizer, start_factor=0.01, end_factor=1.0, total_iters=cfg["warmup_epochs"]
         )
-    
+
     return scheduler
 
-def train_loop(dataloader,model, optimizer, epoch, scheduler=None):
+
+def train_loop(dataloader, model, optimizer, epoch, scheduler=None):
     model.train()
     total_loss = 0
-    
+
     progress_bar = tqdm(dataloader, desc=f"Train Epoch {epoch}")
-    
+
     for batch_idx, (images, targets) in enumerate(progress_bar):
         images, targets = images.to(DEVICE), targets.to(DEVICE)
         optimizer.zero_grad()
@@ -590,44 +560,48 @@ def train_loop(dataloader,model, optimizer, epoch, scheduler=None):
         optimizer.step()
         total_loss += loss.item()
 
-        progress_bar.set_postfix({
-            'loss': f"{loss.item():.4f}",
-            'avg_loss': f"{total_loss / (batch_idx + 1):.4f}",
-        })
-        
-        WANDB.log({
-            "train_loss": loss.item(),
-            "train_avg_loss": total_loss / (batch_idx + 1),
-            "learning_rate": optimizer.param_groups[0]['lr']
-        })
-    
+        progress_bar.set_postfix(
+            {
+                "loss": f"{loss.item():.4f}",
+                "avg_loss": f"{total_loss / (batch_idx + 1):.4f}",
+            }
+        )
+
+        WANDB.log(
+            {
+                "train_loss": loss.item(),
+                "train_avg_loss": total_loss / (batch_idx + 1),
+                "learning_rate": optimizer.param_groups[0]["lr"],
+            }
+        )
+
     # Step the scheduler if provided
     if scheduler is not None:
         scheduler.step()
-    
+
     # Return average loss
     avg_loss = total_loss / len(dataloader)
     LOGGER.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}")
     return avg_loss
 
+
 ############################################### END OF DEFININTIONS ###################################################
 
+
 def main():
-    base_model, base_preprocess, base_tokenizer = create_base_model(CFG["COCOOP"]["base_model"])
     custom_model, custom_preprocess, custom_tokenizer = create_custom_model(CFG["COCOOP"])
 
-    train_transform = torchvision.transforms.Compose([
-        torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
-        torchvision.transforms.RandomHorizontalFlip(),
-        torchvision.transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
-        base_preprocess
-    ])
+    train_transform = torchvision.transforms.Compose(
+        [
+            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+            torchvision.transforms.RandomHorizontalFlip(),
+            torchvision.transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+            custom_preprocess,
+        ]
+    )
 
     LOGGER.info("Loading datasets...")
-    train_set, val_set, test_set = get_data(
-        train_transform=train_transform,
-        test_transform=base_preprocess
-    )
+    train_set, val_set, test_set = get_data(train_transform=train_transform, test_transform=custom_preprocess)
 
     base_classes, novel_classes = base_novel_categories(train_set)
 
@@ -637,53 +611,44 @@ def main():
 
     LOGGER.info("Creating dataloaders...")
     train_loader, val_loader, test_base_loader, test_novel_loader = create_data_loaders(
-        train_base, val_base, test_base, test_novel,
+        train_base,
+        val_base,
+        test_base,
+        test_novel,
         batch_size=CFG["training"]["batch_size"],
     )
 
     optimizer = get_optimizer(custom_model, CFG["training"]["optimizer"])
     scheduler = get_scheduler(optimizer, CFG["training"]["scheduler"])
-   
+
     torch.manual_seed(42)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(42)
-      
+
     LOGGER.info("Starting CoCoOp training...")
     if CFG["training"]["resume_id"]:
-        start_epoch, best_acc = load_checkpoint(
-            custom_model, optimizer, scheduler)
+        start_epoch, best_acc = load_checkpoint(custom_model, optimizer, scheduler)
         start_epoch += 1  # Start from the next epoch
     else:
         start_epoch = 0
         best_acc = 0.0
-    
+
     # Training setup
     patience_counter = 0
 
     LOGGER.info("Starting training...")
     for epoch in range(start_epoch, CFG["training"]["epochs"]):
-        train_loop(
-            dataloader=train_loader,
-            model=custom_model,
-            optimizer=optimizer,
-            epoch=epoch,
-            scheduler=scheduler
-        )
-        
-        val_acc, val_loss = evaluate(
-            model=custom_model,
-            dataloader=val_loader,
-            epoch=epoch,
-            split="val"
-        )
-        
+        train_loop(dataloader=train_loader, model=custom_model, optimizer=optimizer, epoch=epoch, scheduler=scheduler)
+
+        val_acc, val_loss = evaluate(model=custom_model, dataloader=val_loader, epoch=epoch, split="val")
+
         is_best = val_acc > best_acc
         if is_best:
             best_acc = val_acc
             patience_counter = 0
         else:
             patience_counter += 1
-        
+
         save_checkpoint(
             model=custom_model,
             optimizer=optimizer,
@@ -691,14 +656,14 @@ def main():
             epoch=epoch,
             accuracy=val_acc,
             best_acc=best_acc,
-            is_best=is_best
+            is_best=is_best,
         )
-            
+
         # Early stopping
         if patience_counter >= CFG["training"]["patience"]:
             LOGGER.info(f"Early stopping triggered after {patience_counter} epochs without improvement")
             break
-   
+
     # Load best model for final evaluation
     best_model_path = os.path.join(CFG["trainer"]["checkpoint_dir"], "model_best.pth")
     if os.path.exists(best_model_path):
@@ -712,12 +677,10 @@ def main():
         test_novel_loader=test_novel_loader,
         base_classes=base_classes,
         novel_classes=novel_classes,
-        epoch="END"
+        epoch="END",
     )
 
-    LOGGER.info(f"Final: Base Acc={final_base_acc:.4f}, "
-                f"Novel Acc={final_novel_acc:.4f}, "
-                f"HM={final_hm:.4f}")
+    LOGGER.info(f"Final: Base Acc={final_base_acc:.4f}, Novel Acc={final_novel_acc:.4f}, HM={final_hm:.4f}")
     WANDB.finish()
 
 
