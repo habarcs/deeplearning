@@ -332,6 +332,7 @@ def save_checkpoint(model, optimizer, scheduler, epoch, accuracy, best_acc, is_b
     }
 
     checkpoint_dir = RUN_DIR + "checkpoint/"
+    os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_path = checkpoint_dir + "checkpoint_epoch_{epoch}.pth"
     torch.save(checkpoint, checkpoint_path)
     LOGGER.info(f"Saved checkpoint at {checkpoint_path}")
@@ -510,7 +511,7 @@ class CustomCLIP(torch.nn.Module):
         logits = torch.stack(logits)
 
         if self.prompt_learner.training:
-            assert label
+            assert label is not None
             return torch.nn.functional.cross_entropy(logits, label)
 
         return logits
@@ -668,9 +669,7 @@ def main():
             break
 
     # Load best model for final evaluation
-    best_model_path = os.path.join(CFG["trainer"]["checkpoint_dir"], "model_best.pth")
-    if os.path.exists(best_model_path):
-        _, _ = load_checkpoint(custom_model, optimizer, None, best_model_path)
+    load_checkpoint(custom_model, optimizer, None, resume_from="best")
 
     # Final evaluation
     LOGGER.info("==== Final Evaluation ====")
