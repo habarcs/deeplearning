@@ -7,3 +7,6 @@ echo "*.tar.bz2" >> .gitignore
 echo "*.tar.xz" >> .gitignore
 echo "*.tar.lz" >> .gitignore
 echo "*.tar.lzma" >> .gitignore
+echo "checkpoints/" >> .gitignore
+echo "__pycache__/" >> .gitignore
+echo "*.pyc" >> .gitignore  
