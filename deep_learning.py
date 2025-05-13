@@ -254,9 +254,12 @@ def create_data_loaders(
 
 
 def harmonic_mean(base_accuracy, novel_accuracy):
-    numerator = 2
-    denominator = 1 / base_accuracy + 1 / novel_accuracy
-    hm = numerator / denominator
+    try:
+        numerator = 2
+        denominator = 1 / base_accuracy + 1 / novel_accuracy
+        hm = numerator / denominator
+    except ZeroDivisionError:
+        return 0
     return hm
 
 
