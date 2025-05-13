@@ -299,11 +299,13 @@ def eval_with_both_categories(custom_model, test_base_loader, test_novel_loader,
     base_accuracy, _ = evaluate(
         model=custom_model,
         dataloader=test_base_loader,
+        split="test"
     )
 
     novel_accuracy, _ = evaluate(
         model=custom_model,
         dataloader=test_novel_loader,
+        split="test"
     )
 
     hm = harmonic_mean(base_accuracy, novel_accuracy)
