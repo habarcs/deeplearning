@@ -1,12 +1,12 @@
-echo "data/" >> .gitignore
-echo "*.tgz" >> .gitignore
-echo "*.zip" >> .gitignore
-echo "*.tar" >> .gitignore
-echo "*.tar.gz" >> .gitignore
-echo "*.tar.bz2" >> .gitignore
-echo "*.tar.xz" >> .gitignore
-echo "*.tar.lz" >> .gitignore
-echo "*.tar.lzma" >> .gitignore
-echo "checkpoints/" >> .gitignore
-echo "__pycache__/" >> .gitignore
-echo "*.pyc" >> .gitignore  
+data/
+*.tgz
+*.zip
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.lz
+*.tar.lzma
+checkpoints/
+__pycache__/
+*.pyc
