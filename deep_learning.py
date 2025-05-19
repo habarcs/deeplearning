@@ -8,6 +8,7 @@ from tqdm import tqdm
 import wandb
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 import logging
 from datetime import datetime
 
@@ -38,6 +39,12 @@ CFG = {
             "warmup_epochs": 1,
         },
     },
+    "validation": {
+        "ema": {
+            "enabled": True,
+            "decay": 0.999,
+        }
+    },
 }
 
 RUN_ID = CFG["training"]["resume_id"] if CFG["training"]["resume_id"] else datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
@@ -51,13 +58,17 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger("cocoop_training")
 
-WANDB = wandb.init(
-    entity="mhevizi-unitn",
-    project="Deep learning project",
-    config=CFG,
-    name="CoCoOp_" + RUN_ID,
-    tags=["cocoop", CFG["COCOOP"]["base_model"]["name"]],
-) if CFG["wandb"] else wandb.init(mode="disabled")
+WANDB = (
+    wandb.init(
+        entity="mhevizi-unitn",
+        project="Deep learning project",
+        config=CFG,
+        name="CoCoOp_" + RUN_ID,
+        tags=["cocoop", CFG["COCOOP"]["base_model"]["name"]],
+    )
+    if CFG["wandb"]
+    else wandb.init(mode="disabled")
+)
 
 DEVICE = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
 LOGGER.info(f"Using {DEVICE} device")
@@ -299,17 +310,9 @@ def evaluate(model, dataloader, epoch=0, split="val"):
 
 
 def eval_with_both_categories(custom_model, test_base_loader, test_novel_loader, base_classes, novel_classes, epoch):
-    base_accuracy, _ = evaluate(
-        model=custom_model,
-        dataloader=test_base_loader,
-        split="test"
-    )
+    base_accuracy, _ = evaluate(model=custom_model, dataloader=test_base_loader, split="test")
 
-    novel_accuracy, _ = evaluate(
-        model=custom_model,
-        dataloader=test_novel_loader,
-        split="test"
-    )
+    novel_accuracy, _ = evaluate(model=custom_model, dataloader=test_novel_loader, split="test")
 
     hm = harmonic_mean(base_accuracy, novel_accuracy)
 
@@ -324,9 +327,10 @@ def eval_with_both_categories(custom_model, test_base_loader, test_novel_loader,
     return base_accuracy, novel_accuracy, hm
 
 
-def save_checkpoint(model, optimizer, scheduler, epoch, accuracy, best_acc, is_best=False):
+def save_checkpoint(model, avg_model, optimizer, scheduler, epoch, accuracy, best_acc, is_best=False):
     checkpoint = {
         "model": model.state_dict(),
+        "avg_model": avg_model.state_dict() if avg_model else None,
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict() if scheduler else None,
         "epoch": epoch,
@@ -346,7 +350,7 @@ def save_checkpoint(model, optimizer, scheduler, epoch, accuracy, best_acc, is_b
         LOGGER.info(f"Saved best model with accuracy {accuracy:.4f} at {best_path}")
 
 
-def load_checkpoint(model, optimizer, scheduler, resume_from="best"):
+def load_checkpoint(model, avg_model, optimizer, scheduler, resume_from="best"):
     checkpoint_dir = RUN_DIR + "checkpoint/"
     if resume_from == "best":
         checkpoint_path = checkpoint_dir + "model_best.pth"
@@ -360,6 +364,9 @@ def load_checkpoint(model, optimizer, scheduler, resume_from="best"):
 
     if scheduler and checkpoint["scheduler"]:
         scheduler.load_state_dict(checkpoint["scheduler"])
+
+    if avg_model and checkpoint["avg_model"]:
+        avg_model.load_state_dict(checkpoint["avg_model"])
 
     epoch = checkpoint["epoch"]
     best_accuracy = checkpoint.get("best_accuracy", 0.0)
@@ -553,7 +560,7 @@ def get_scheduler(optimizer, cfg):
     return scheduler
 
 
-def train_loop(dataloader, model, optimizer, epoch, scheduler=None):
+def train_loop(dataloader, model, avg_model, optimizer, epoch, scheduler=None):
     model.train()
     total_loss = 0
 
@@ -565,6 +572,8 @@ def train_loop(dataloader, model, optimizer, epoch, scheduler=None):
         loss = model(images, targets)
         loss.backward()
         optimizer.step()
+        if avg_model:
+            avg_model.update_parameters(model)
         total_loss += loss.item()
 
         progress_bar.set_postfix(
@@ -597,6 +606,11 @@ def train_loop(dataloader, model, optimizer, epoch, scheduler=None):
 
 def main():
     custom_model, custom_preprocess, custom_tokenizer = create_custom_model(CFG["COCOOP"])
+    avg_model = (
+        AveragedModel(custom_model, multi_avg_fn=get_ema_multi_avg_fn(CFG["validation"]["ema"]["decay"]))
+        if CFG["validation"]["ema"]["enabled"]
+        else None
+    )
 
     train_transform = torchvision.transforms.Compose(
         [
@@ -634,7 +648,7 @@ def main():
 
     LOGGER.info("Starting CoCoOp training...")
     if CFG["training"]["resume_id"]:
-        start_epoch, best_acc = load_checkpoint(custom_model, optimizer, scheduler)
+        start_epoch, best_acc = load_checkpoint(custom_model, avg_model, optimizer, scheduler)
         start_epoch += 1  # Start from the next epoch
     else:
         start_epoch = 0
@@ -645,9 +659,18 @@ def main():
 
     LOGGER.info("Starting training...")
     for epoch in range(start_epoch, CFG["training"]["epochs"]):
-        train_loop(dataloader=train_loader, model=custom_model, optimizer=optimizer, epoch=epoch, scheduler=scheduler)
+        train_loop(
+            dataloader=train_loader,
+            model=custom_model,
+            avg_model=avg_model,
+            optimizer=optimizer,
+            epoch=epoch,
+            scheduler=scheduler,
+        )
 
-        val_acc, val_loss = evaluate(model=custom_model, dataloader=val_loader, epoch=epoch, split="val")
+        val_acc, val_loss = evaluate(
+            model=avg_model if avg_model else custom_model, dataloader=val_loader, epoch=epoch, split="val"
+        )
 
         is_best = val_acc > best_acc
         if is_best:
@@ -658,6 +681,7 @@ def main():
 
         save_checkpoint(
             model=custom_model,
+            avg_model=avg_model,
             optimizer=optimizer,
             scheduler=scheduler,
             epoch=epoch,
@@ -672,12 +696,12 @@ def main():
             break
 
     # Load best model for final evaluation
-    load_checkpoint(custom_model, optimizer, None, resume_from="best")
+    load_checkpoint(custom_model, avg_model, optimizer, None, resume_from="best")
 
     # Final evaluation
     LOGGER.info("==== Final Evaluation ====")
     final_base_acc, final_novel_acc, final_hm = eval_with_both_categories(
-        custom_model=custom_model,
+        custom_model=avg_model if avg_model else custom_model,
         test_base_loader=test_base_loader,
         test_novel_loader=test_novel_loader,
         base_classes=base_classes,
