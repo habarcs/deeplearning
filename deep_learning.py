@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 import logging
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 CFG = {
     "COCOOP": {
@@ -599,6 +600,55 @@ def train_loop(dataloader, model, avg_model, optimizer, epoch, scheduler=None):
     avg_loss = total_loss / len(dataloader)
     LOGGER.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}")
     return avg_loss
+
+
+######## Plot Example #######
+
+# Depending on how we run the main function we cangenerate a list of Model Variations and improvements
+# Baseline is CLIP?
+# These are example Model Variations and improvements
+# Replace them with actual Model Variations and improvements
+
+
+model_var = ["CLIP+1", "CLIP+A", "CLIP+A+1", "Joacos Model", "Marton Models"]
+improvements = [45.97, 28.37, 21.26, 17.75, -2.64]
+
+
+def plot_model_comparison(model_var, improvements, title="Comparison of Models", xlabel="Absolute improvement (%)", figsize=(8, 6)):
+    """
+    Plots a horizontal bar chart showing absolute improvements for different datasets or models.
+    
+    Parameters:
+    - dataset_names: List of dataset or task names.
+    - improvements: List of corresponding absolute improvements (can be positive or negative).
+    - title: Title of the plot.
+    - xlabel: Label for the X-axis.
+    - figsize: Size of the figure.
+    """
+    
+    
+    
+    # Sort datasets by improvement
+    sorted_data = sorted(zip(improvements, model_var), reverse=True)
+    sorted_improvements, sorted_names = zip(*sorted_data)
+
+    # Color coding: green for positive, blue for zero/near zero, red for negative
+    colors = ['green' if x > 0 else 'blue' if x == 0 else 'red' for x in sorted_improvements]
+
+    plt.figure(figsize=figsize)
+    bars = plt.barh(sorted_names, sorted_improvements, color=colors)
+    plt.xlabel(xlabel)
+    plt.title(title)
+    
+    # Add value labels
+    for bar, val in zip(bars, sorted_improvements):
+        plt.text(val + (0.5 if val > 0 else -3), bar.get_y() + bar.get_height()/2,
+                 f"{val:+.2f}", va='center', ha='left' if val > 0 else 'right', fontsize=9)
+    
+    plt.gca().invert_yaxis()  # Highest improvement on top
+    plt.tight_layout()
+    plt.show()
+
 
 
 ############################################### END OF DEFININTIONS ###################################################
