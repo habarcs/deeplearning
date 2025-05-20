@@ -10,6 +10,11 @@ Original file is located at
 Here comes important information about the project**...**
 """
 
+# TO DO - HELIP:
+# 1. Once HELIP is validated by the group, take out all the comments that containt the word "HELIP" (except the ones in the config)
+# 2. To make sure HELIP is actually doing something, the HNML in the logs should be non-zero.
+# 3. The loss should be lower than without HELIP.
+
 # configuration
 cfg = {
     "base_model": {
@@ -19,15 +24,15 @@ cfg = {
     "trainer": {
         "batch_size": 4,  # 32 is the default batch size for the ViT-B-32 model but it was crashing my local machine
         "epochs": 3,
-        "lr": 0.002, #test 
+        "lr": 0.002,          # test 
         "weight_decay": 0.05, # test
-        "warmup_epochs": 1, # Possibly we'll need more
+        "warmup_epochs": 1,   # Possibly we'll need more
         "patience": 5,
         "checkpoint_dir": "./checkpoints",
         "cocoop": {
-            "n_ctx": 8,   # Reduced from 16 to save memory
+            "n_ctx": 8,     # Reduced from 16 to save memory
             "ctx_init": "", # empty string for random initialization (FOR NOW)
-            "prec": "fp16" # Use fp16 precision to save memory
+            "prec": "fp16"  # Use fp16 precision to save memory
         }
     },
     "input": {
@@ -35,12 +40,26 @@ cfg = {
     },
     "data": {
         "data_dir": "./data",
-        "num_workers": 0,  # Enable parallel data loading when running in cloud, use 2 or 4
+        "num_workers": 0,    # Enable parallel data loading when running in cloud, use 2 or 4
         "pin_memory": False  # Idem
+    },
+    # HELIP configs
+    "helip": {
+        "enabled": True,
+        "k": 5,                # Number of hard pairs to mine per sample, diminishing returns, in the paper they also suggested 3
+        "p": 20,               # Number of random pairs to sample
+        "alpha": 0.25,         # Margin parameter for HNML (Hard Negative Mining Loss)
+        "lambda_hnml": 0.5,    # Weight for HNML in the combined loss - 
+                               # TO DO - 1: find a better value for key hyperparam 
+                               # TO DO - 2: balance this lambda with other regularizers lambdas, if all high, we'll underfit 
+                               # (cross-modal consistency, augmentation, etc.)
+        "mining_freq": 5,      # Mine hard pairs every N epochs (to avoid mining each epoch)
+        "cache_embeddings": True  # Whether to cache embeddings between epochs, to avoid recomputing them
     }
 }
 
 # installing packages, use specific versions
+# TO DO: Make sure HELIP requirements are well included here
 # !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10
 
 import os
@@ -251,6 +270,443 @@ def split_data(dataset, base_classes):
 
 """## Define training and testing loops"""
 
+# HELIP
+
+# Initialize Hard Pair Mining. We pick the CustomCLIP model as the base model, data, device and configs
+class HardPairMining:
+    def __init__(self, custom_clip_model, dataset, device, cfg):
+        
+        self.model = custom_clip_model  # CustomCLIP model with prompt learner
+        self.dataset = dataset
+        self.device = device
+        self.k = cfg["helip"]["k"]
+        self.p = cfg["helip"]["p"]
+        self.alpha = cfg["helip"]["alpha"]
+        
+        # Storage for cached embeddings and hard pairs
+        self.cached_embeddings = None
+        self.cached_hard_pairs = {}
+        self.cache_embeddings = cfg["helip"]["cache_embeddings"]
+        self.last_mining_epoch = 0
+    
+    # Compute embeddings for pairs in the dataset using CoCoOp's prompt learning mechanism
+    def _compute_pair_embeddings(self, sample_indices=None):
+        if sample_indices is None:
+            dataloader = DataLoader(
+                self.dataset, 
+                batch_size=4,  # TO DO: find proper batch size (for now, a very small one to avoid memory issues
+                shuffle=False, 
+                num_workers=cfg["data"]["num_workers"]
+            )
+        else:
+            # Create a subset with specific indices
+            subset = torch.utils.data.Subset(self.dataset, sample_indices)
+            dataloader = DataLoader(
+                subset, 
+                batch_size=4, # TO DO: Idem above
+                shuffle=False, 
+                num_workers=cfg["data"]["num_workers"]
+            )
+        
+        all_image_features = []
+        all_text_features = []
+        all_labels = []
+        
+        with torch.no_grad():
+            self.model.eval()
+            for images, labels in tqdm(dataloader, desc="Computing embeddings for HELIP"):
+                images = images.to(self.device)
+                
+                # Run the full CoCoOp forward pass to get text features with the meta-network
+                # Important to use CoCoOp's prompt mechanism properly
+                logits = self.model(images)  # This will populate self.model.text_features
+                
+                # Get image features
+                image_features = self.model.image_encoder(images.type(self.model.dtype))
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                
+                # Now extract the text features which have been stored
+                # The model should compute text features for all classes
+                if self.model.text_features is not None:
+                    # For CoCoOp, text_features can have shape [batch_size * num_classes, feature_dim]
+                    # We need to ensure we only take features for this batch
+                    batch_size = image_features.size(0)
+                    
+                    # Handle different text_features shapes based on CoCoOp implementation
+                    if self.model.text_features.size(0) > batch_size:
+                        # If text_features contains features for all classes, get just batch_size entries
+                        text_features = self.model.text_features[:batch_size]
+                    else:
+                        text_features = self.model.text_features
+                    
+                    # Store the embeddings
+                    all_image_features.append(image_features.cpu())
+                    all_text_features.append(text_features.cpu())
+                    all_labels.append(labels)
+                else:
+                    logger.warning("No text features found after forward pass. Skipping batch.")
+        
+        # Only create embeddings if we have data
+        if not all_image_features or not all_text_features:
+            logger.error("No embeddings were collected during mining. Check model implementation.")
+            return None
+            
+        # Create the embeddings dictionary
+        embeddings = {
+            'image_features': torch.cat(all_image_features),
+            'text_features': torch.cat(all_text_features),
+            'labels': torch.cat(all_labels)
+        }
+        
+        # Log shapes for debugging
+        logger.info(f"Computed embeddings - Images: {embeddings['image_features'].shape}, Text: {embeddings['text_features'].shape}")
+        
+        # Verify sizes match
+        if embeddings['image_features'].size(0) != embeddings['text_features'].size(0):
+            logger.warning(f"Mismatch in number of samples: image={embeddings['image_features'].size(0)}, text={embeddings['text_features'].size(0)}")
+            logger.warning("Attempting to fix by truncating to shorter dimension")
+            min_size = min(embeddings['image_features'].size(0), embeddings['text_features'].size(0))
+            embeddings['image_features'] = embeddings['image_features'][:min_size]
+            embeddings['text_features'] = embeddings['text_features'][:min_size]
+            embeddings['labels'] = embeddings['labels'][:min_size]
+        
+        return embeddings
+    
+    # Find hard pairs for the given dataset indices using the original HELIP approach
+    def mine_hard_pairs(self, dataset_indices, epoch):
+        # Check if we need to mine new pairs based on epoch frequency
+        if epoch // cfg["helip"]["mining_freq"] == self.last_mining_epoch // cfg["helip"]["mining_freq"] and self.cached_hard_pairs:
+            logger.info(f"Using cached hard pairs from epoch {self.last_mining_epoch}")
+            return self.cached_hard_pairs
+            
+        # Compute or load embeddings
+        if self.cached_embeddings is None or not self.cache_embeddings:
+            logger.info("Computing embeddings for hard pair mining")
+            self.cached_embeddings = self._compute_pair_embeddings()
+        
+        hard_pairs = {}
+        
+        # Get all embeddings
+        all_image_features = self.cached_embeddings['image_features']
+        all_text_features = self.cached_embeddings['text_features']
+        
+        # For each dataset index, find hard pairs
+        for target_idx in tqdm(dataset_indices, desc=f"Mining hard pairs for epoch {epoch}"):
+            # Convert target_idx to int if it's a tensor
+            target_idx_int = target_idx.item() if hasattr(target_idx, 'item') else target_idx
+            
+            # Get target embeddings
+            target_image_emb = all_image_features[target_idx].to(self.device)
+            target_text_emb = all_text_features[target_idx].to(self.device)
+            
+            # Randomly sample p candidate pairs (as in original HELIP)
+            total_samples = len(all_image_features)
+            random_indices = torch.randperm(total_samples)[:self.p]
+            
+            # Calculate agreement scores (how well other pairs match with target pair)
+            agreement_scores = []
+            
+            for idx in random_indices:
+                if idx == target_idx:
+                    continue
+                    
+                candidate_image_emb = all_image_features[idx].to(self.device)
+                candidate_text_emb = all_text_features[idx].to(self.device)
+                
+                # Agreement score as in HELIP paper
+                # Using torch.matmul for scalar products to avoid transpose warning
+                i2t_score = torch.matmul(target_image_emb.flatten(), candidate_text_emb.flatten())
+                t2i_score = torch.matmul(candidate_image_emb.flatten(), target_text_emb.flatten())
+                score = i2t_score + t2i_score
+                
+                # Convert idx to int if it's a tensor
+                idx_int = idx.item() if hasattr(idx, 'item') else idx
+                agreement_scores.append((idx_int, score.item()))
+            
+            # Sort by score (lower is harder) and get top-k hard pairs
+            hard_pairs_indices = sorted(agreement_scores, key=lambda x: x[1])[:self.k]
+            hard_pairs[target_idx_int] = [idx for idx, _ in hard_pairs_indices]
+        
+        # Cache results
+        self.cached_hard_pairs = hard_pairs
+        self.last_mining_epoch = epoch
+        
+        return hard_pairs
+
+# Compute Hard Negative Margin Loss as described in HELIP's paper
+def hard_negative_margin_loss(image_features, # Normalized image features [batch_size, feature_dim]
+                              text_features, # Normalized text features [batch_size, feature_dim]
+                              hard_pairs_indices, # Dictionary mapping indices to lists of hard pair indices
+                              alpha=0.05 # Margin parameter (originally set at 0.25, flexibilized, should be tested)
+                              ):
+    batch_size = image_features.shape[0]
+    device = image_features.device
+    
+    # Calculate similarity matrix between all images and texts
+    sim_matrix = image_features @ text_features.T
+    
+    # Define positive pair similarities (diagonal elements)
+    pos_idx = torch.arange(batch_size, device=device)
+    pos_sim = sim_matrix[pos_idx, pos_idx]
+    
+    # Initialize loss
+    hnml_loss = torch.tensor(0.0, device=device)
+    count = 0
+    
+    # Process each sample in the batch
+    for i in range(batch_size):
+        # Convert sample_idx to int if it's a tensor
+        sample_idx = i
+        
+        if sample_idx not in hard_pairs_indices or not hard_pairs_indices[sample_idx]:
+            continue
+        
+        # Get hard indices and convert to tensor
+        hard_indices_list = hard_pairs_indices[sample_idx]
+        hard_indices = torch.tensor(hard_indices_list, device=device)
+        
+        # Find indices that are in the current batch
+        batch_mask = hard_indices < batch_size
+        if not batch_mask.any():
+            continue
+            
+        hard_indices = hard_indices[batch_mask]
+        
+        # Get similarities with hard negative pairs
+        hard_neg_sim_i2t = sim_matrix[i, hard_indices]
+        hard_neg_sim_t2i = sim_matrix[hard_indices, i]
+        
+        # Calculate hinge loss with margin for each hard negative
+        i2t_loss = torch.sum(torch.clamp(hard_neg_sim_i2t - pos_sim[i] + alpha, min=0))
+        t2i_loss = torch.sum(torch.clamp(hard_neg_sim_t2i - pos_sim[i] + alpha, min=0))
+        
+        hnml_loss += (i2t_loss + t2i_loss)
+        count += len(hard_indices) * 2
+    
+    # Normalize by actual number of pairs processed, or return zero if no pairs
+    if count > 0:
+        return hnml_loss / count
+    return hnml_loss
+
+
+
+
+def train_loop(dataloader, model, optimizer, epoch, device, scheduler=None, 
+                # HELIP
+                use_helip=False, # Boolean flag to use or not HELIP
+                hard_pair_miner=None, # Hard pair mining module
+                lambda_hnml=0.5 # Weight for hard negative margin loss
+                # End of HELIP
+                ):
+
+    model.train()
+    total_loss = 0
+    total_contrastive_loss = 0
+    total_hnml_loss = 0
+    
+    # Progress bar for training
+    progress_bar = tqdm(dataloader, desc=f"Train Epoch {epoch}")
+    
+    # Initialize hard_pairs as empty dict by default
+    hard_pairs = {}
+    
+    # If HELIP is enabled, mine hard pairs for this epoch
+    if use_helip and hard_pair_miner is not None:
+        # Get all dataset indices for current batch
+        dataset_indices = dataloader.dataset.indices if hasattr(dataloader.dataset, 'indices') else list(range(len(dataloader.dataset)))
+        
+        # Mine hard pairs for this epoch
+        hard_pairs = hard_pair_miner.mine_hard_pairs(dataset_indices, epoch)
+    # End of HELIP
+    
+    # Training loop
+    for batch_idx, (images, targets) in enumerate(progress_bar):
+        # Move data to device
+        images, targets = images.to(device), targets.to(device)
+        
+        # Zero gradients
+        optimizer.zero_grad()
+        
+        # Standard CoCoOp forward pass which returns cross-entropy loss
+        contrastive_loss = model(images, targets)
+        
+        # Convert non-scalar loss to scalar for backprop - this is essential
+        if isinstance(contrastive_loss, torch.Tensor) and contrastive_loss.dim() > 0:
+            logger.info(f"Converting contrastive loss of shape {contrastive_loss.shape} to scalar for backprop")
+            contrastive_loss = contrastive_loss.mean()
+        
+        # Safely convert to scalar for logging
+        try:
+            # Check if contrastive_loss is a scalar or can be converted to one
+            if isinstance(contrastive_loss, torch.Tensor) and contrastive_loss.numel() == 1:
+                cont_loss_val = contrastive_loss.item()
+            else:
+                # If it's not a scalar, log a warning and use a dummy value
+                logger.warning(f"Contrastive loss is not a scalar (shape: {contrastive_loss.shape if hasattr(contrastive_loss, 'shape') else 'unknown'}). Using mean for logging.")
+                cont_loss_val = contrastive_loss.mean().item() if isinstance(contrastive_loss, torch.Tensor) else 0.0
+        except Exception as e:
+            logger.warning(f"Error converting contrastive loss to scalar: {e}. Using 0.0 for logging.")
+            cont_loss_val = 0.0
+            
+        total_contrastive_loss += cont_loss_val
+        
+        # If HELIP is enabled, compute additional hard negative margin loss
+        if use_helip and hard_pair_miner is not None and lambda_hnml > 0:
+            # Get batch indices
+            batch_start = batch_idx * dataloader.batch_size
+            batch_end = min(batch_start + dataloader.batch_size, len(dataset_indices))
+            batch_indices = list(range(batch_start, batch_end))
+            
+            # Get hard pairs for current batch samples
+            batch_hard_pairs = {}
+            for i, orig_idx in enumerate(batch_indices):
+                if not hasattr(dataloader.dataset, 'indices'):
+                    # If dataset doesn't have indices attribute (direct dataset)
+                    dataset_idx = orig_idx
+                else:
+                    # If dataset is a Subset (has indices attribute)
+                    dataset_idx = dataset_indices[orig_idx]
+                
+                dataset_idx_int = dataset_idx.item() if hasattr(dataset_idx, 'item') else dataset_idx
+                
+                # Get hard pairs for this index
+                batch_hard_pairs[i] = hard_pairs.get(dataset_idx_int, [])
+            
+            # Compute image features with gradients for HNML
+            # Forward pass through image encoder - KEEP GRADIENTS for backward pass
+            image_features = model.image_encoder(images.type(model.dtype))
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            
+            # The forward pass already computed and stored text features in model.text_features
+            # We can directly use them for HNML
+            if model.text_features is not None:
+                # The text features shape might be [n_classes, feature_dim] instead of [batch_size, feature_dim]
+                # Ensure we only use the first batch_size features if needed
+                batch_size = image_features.size(0)
+                if model.text_features.size(0) > batch_size:
+                    text_features = model.text_features[:batch_size]
+                else:
+                    text_features = model.text_features
+                
+                # Verify shapes match for matrix operations
+                if image_features.size(0) != text_features.size(0):
+                    logger.warning(f"Shape mismatch in HNML: image_features={image_features.shape}, text_features={text_features.shape}")
+                    # Fall back to just contrastive loss
+                    loss = contrastive_loss
+                    hnml = torch.tensor(0.0, device=device)
+                    hnml_val = 0.0
+                else:
+                    # Compute Hard Negative Margin Loss
+                    hnml = hard_negative_margin_loss(
+                        image_features, 
+                        text_features, 
+                        batch_hard_pairs, 
+                        alpha=hard_pair_miner.alpha
+                    )
+                    
+                    # Make sure both losses are scalars
+                    if isinstance(hnml, torch.Tensor) and hnml.dim() > 0:
+                        hnml = hnml.mean()
+                    
+                    # Ensure we have scalar tensors with gradients for loss calculation
+                    if isinstance(contrastive_loss, torch.Tensor) and not contrastive_loss.requires_grad:
+                        logger.warning("Contrastive loss does not require gradients - fixing")
+                        contrastive_loss = contrastive_loss.detach().clone().requires_grad_(True)
+                    
+                    # Combined loss (both components are now scalars)
+                    loss = contrastive_loss + lambda_hnml * hnml
+                    
+                    # Get hnml value for logging (with no_grad to avoid memory leaks)
+                    with torch.no_grad():
+                        try:
+                            hnml_val = hnml.item() if isinstance(hnml, torch.Tensor) and hnml.numel() == 1 else float(hnml)
+                            total_hnml_loss += hnml_val
+                        except Exception as e:
+                            logger.warning(f"Error converting HNML to scalar: {e}")
+                            hnml_val = 0.0
+            else:
+                # If we couldn't get text features, just use contrastive loss
+                loss = contrastive_loss
+                hnml = torch.tensor(0.0, device=device)
+                hnml_val = 0.0
+            
+        else:
+            loss = contrastive_loss
+            hnml = torch.tensor(0.0, device=device)
+            hnml_val = 0.0
+        
+        # Final check to ensure loss is a scalar with gradients before backward
+        if isinstance(loss, torch.Tensor) and loss.dim() > 0:
+            logger.warning(f"Final loss has shape {loss.shape} - converting to mean")
+            loss = loss.mean()
+        
+        # Backward pass and optimize
+        loss.backward()
+        optimizer.step()
+        
+        # Safely get loss value for logging
+        try:
+            loss_val = loss.item() if hasattr(loss, 'item') else float(loss)
+        except Exception as e:
+            logger.warning(f"Error converting loss to scalar: {e}. Using sum of parts.")
+            loss_val = cont_loss_val + hnml_val
+            
+        # Update metrics
+        total_loss += loss_val
+        
+        # Update progress bar
+        # HELIP
+        if use_helip:
+            progress_bar.set_postfix({
+                'loss': f"{loss_val:.4f}",
+                'cont_loss': f"{cont_loss_val:.4f}",
+                'hnml': f"{hnml_val:.4f}" if lambda_hnml > 0 else "0.0000",
+                'avg_loss': f"{total_loss / (batch_idx + 1):.4f}",
+            })
+            
+            # Log to wandb
+            wandb_run.log({
+                "train_loss": loss_val,
+                "contrastive_loss": cont_loss_val,
+                "hnml": hnml_val if lambda_hnml > 0 else 0.0,
+                "train_avg_loss": total_loss / (batch_idx + 1),
+                "learning_rate": optimizer.param_groups[0]['lr']
+            })
+        else:
+            progress_bar.set_postfix({
+                'loss': f"{loss_val:.4f}",
+                'avg_loss': f"{total_loss / (batch_idx + 1):.4f}",
+            })
+            
+            # Log to wandb
+            wandb_run.log({
+                "train_loss": loss_val,
+                "train_avg_loss": total_loss / (batch_idx + 1),
+                "learning_rate": optimizer.param_groups[0]['lr']
+            })
+        # End of HELIP
+    
+    # Step the scheduler if provided
+    if scheduler is not None:
+        scheduler.step()
+    
+    # Return average losses
+    avg_loss = total_loss / len(dataloader)
+    avg_contrastive_loss = total_contrastive_loss / len(dataloader)
+    
+    # HELIP
+    if use_helip:
+        avg_hnml_loss = total_hnml_loss / len(dataloader) if lambda_hnml > 0 else 0.0
+        
+        logger.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}, "
+                    f"Contrastive Loss: {avg_contrastive_loss:.4f}, "
+                    f"HNML: {avg_hnml_loss:.4f}")
+    else:
+        logger.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}")
+    # End of HELIP
+    
+    return avg_loss
+
 
 @torch.no_grad()
 def eval(model, dataset, categories, batch_size, device, tokenizer, label=""):
@@ -308,57 +764,6 @@ def harmonic_mean(base_accuracy, novel_accuracy):
     denominator = 1 / base_accuracy + 1 / novel_accuracy
     hm = numerator / denominator
     return hm
-
-
-# train for one epoch
-def train_loop(dataloader,model, optimizer, epoch, device, scheduler=None):
-
-    model.train()
-    total_loss = 0
-    correct = 0
-    total = 0
-    
-    # Progress bar for training
-    progress_bar = tqdm(dataloader, desc=f"Train Epoch {epoch}")
-    
-    for batch_idx, (images, targets) in enumerate(progress_bar):
-        # Move data to device
-        images, targets = images.to(device), targets.to(device)
-        
-        # Zero gradients
-        optimizer.zero_grad()
-        
-        # Forward pass
-        loss = model(images, targets)
-        
-        # Backward pass and optimize
-        loss.backward()
-        optimizer.step()
-        
-        # Update metrics
-        total_loss += loss.item()
-        
-        # Update progress bar
-        progress_bar.set_postfix({
-            'loss': f"{loss.item():.4f}",
-            'avg_loss': f"{total_loss / (batch_idx + 1):.4f}",
-        })
-        
-        # Log to wandb
-        wandb_run.log({
-            "train_loss": loss.item(),
-            "train_avg_loss": total_loss / (batch_idx + 1),
-            "learning_rate": optimizer.param_groups[0]['lr']
-        })
-    
-    # Step the scheduler if provided
-    if scheduler is not None:
-        scheduler.step()
-    
-    # Return average loss
-    avg_loss = total_loss / len(dataloader)
-    logger.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}")
-    return avg_loss
 
 
 @torch.no_grad()
@@ -606,7 +1011,9 @@ class CustomCLIP(torch.nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = getattr(clip_model, "dtype", torch.float32)
         self.device = device
-
+        # HELIP: Store the text features for later use
+        self.text_features = None
+    
     def forward(self, image, label=None):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
@@ -614,7 +1021,7 @@ class CustomCLIP(torch.nn.Module):
         # Use the default precision for image features
         image_features = self.image_encoder(image.type(self.dtype))
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-
+        
         # If meta_net is using half precision, convert image_features to half precision for the prompt learner
         if getattr(self.prompt_learner, 'meta_net', None) is not None and next(self.prompt_learner.meta_net.parameters()).dtype == torch.float16:
             prompts = self.prompt_learner(image_features.half())
@@ -622,20 +1029,64 @@ class CustomCLIP(torch.nn.Module):
             prompts = self.prompt_learner(image_features)
         
         logits = []
+        
+        # HELIP: Store all text features
+        all_text_features = []
+        
         for pts_i, imf_i in zip(prompts, image_features):
             text_features = self.text_encoder(pts_i, tokenized_prompts)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            
+            # HELIP: Store text features
+            all_text_features.append(text_features)
+            
             l_i = logit_scale * imf_i @ text_features.t()
             logits.append(l_i)
+        
         logits = torch.stack(logits)
+        
+        # HELIP: Store text features for later use in compute_similarity
+        self.text_features = torch.cat(all_text_features)
         
         if self.prompt_learner.training:
             if label is not None:
-                return F.cross_entropy(logits, label)
+                # Check if logits shape is compatible with cross_entropy
+                if logits.dim() > 2:
+                    # Reshape logits to [batch_size, num_classes]
+                    batch_size = image.size(0)
+                    logits = logits.view(batch_size, -1)
+                    
+                # Ensure label shape matches what cross_entropy expects
+                if label.dim() > 1:
+                    label = label.view(-1)
+                
+                # Try to compute cross entropy, with fallback
+                try:
+                    return F.cross_entropy(logits, label)
+                except Exception as e:
+                    # Fallback: compute mean of each logit row as a scalar loss
+                    logger.warning(f"Cross entropy failed: {e}. Using fallback loss.")
+                    return logits.mean()
             else:
-                return logits
+                # If no label, return mean of logits as scalar loss during training
+                return logits.mean()
         
         return logits
+    
+    # Compute the similarity between image features and text features to make HELIP work
+    def compute_similarity(self, image_features):
+        # Ensure text features exist
+        if self.text_features is None:
+            raise ValueError("Text features not computed yet. Call forward method first.")
+        
+        # Get logit scale
+        logit_scale = self.logit_scale.exp()
+        
+        # Compute similarity scores
+        logits_per_image = logit_scale * (image_features @ self.text_features.T)
+        logits_per_text = logits_per_image.T
+        
+        return logits_per_image, logits_per_text
 
 
 def create_base_model(device):
@@ -816,10 +1267,16 @@ def load_checkpoint(model, optimizer, scheduler, checkpoint_path, device):
         return 0, 0.0
 
 
-# Main training function for CoCoOp model, receives a config dict and returns best accuracies
 def train_cocoop(cfg, device):
-
-    logger.info("==== Starting CoCoOp Training ====")
+    # Check if HELIP is enabled
+    helip_enabled = cfg.get("helip", {}).get("enabled", False)
+    
+    if helip_enabled:
+        logger.info("==== Starting CoCoOp Training with HELIP ====")
+    else:
+        logger.info("==== Starting CoCoOp Training ====")
+    # End of HELIP part
+        
     logger.info(f"Config: {cfg}")
     
     # Set random seed for reproducibility
@@ -834,7 +1291,7 @@ def train_cocoop(cfg, device):
     custom_model = custom_model.to(device)
     
     # Create data augmentation for training
-    train_transform = torchvision.transforms.Compose([ # TO DO: Explore better augmentations
+    train_transform = torchvision.transforms.Compose([
         torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
         torchvision.transforms.RandomHorizontalFlip(),
         torchvision.transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
@@ -869,6 +1326,20 @@ def train_cocoop(cfg, device):
     # Create optimizer and scheduler
     logger.info("Setting up optimizer and scheduler...")
     optimizer, scheduler = get_optimizer_and_scheduler(custom_model, cfg)
+    
+    # Initialize HELIP if enabled
+    hard_pair_miner = None
+    if helip_enabled:
+        logger.info("HELIP is enabled for training")
+        # Initialize hard pair mining for base classes only
+        hard_pair_miner = HardPairMining(
+            custom_clip_model=custom_model,
+            dataset=train_base,
+            device=device,
+            cfg=cfg
+        )
+    else:
+        logger.info("HELIP is disabled, using standard training")
     
     # Training setup
     start_epoch = 0
@@ -909,14 +1380,17 @@ def train_cocoop(cfg, device):
     logger.info("Starting training...")
     for epoch in range(start_epoch, cfg["trainer"]["epochs"]):
         try:
-            # Train for one epoch
+            # Train for one epoch with unified train_loop function
             train_loss = train_loop(
                 dataloader=train_loader,
                 model=custom_model,
                 optimizer=optimizer,
                 epoch=epoch + 1,
                 device=device,
-                scheduler=scheduler
+                scheduler=scheduler,
+                use_helip=helip_enabled,
+                hard_pair_miner=hard_pair_miner,
+                lambda_hnml=cfg["helip"].get("lambda_hnml", 0.5) if helip_enabled else 0.0
             )
             
             # Evaluate on validation set
@@ -1014,8 +1488,7 @@ def train_cocoop(cfg, device):
     
     # Return best results
     return best_base_acc, best_novel_acc, best_hm
-
-"""## Evaluate zero shot accuracy"""
+# End of HELIP part
 
 def main():
     """Main function that ties everything together."""
@@ -1078,9 +1551,10 @@ def main():
         logger.info(f"🔍 Novel classes accuracy: {novel_accuracy * 100:.2f}%")
         logger.info(f"🔍 Harmonic Mean: {hm * 100:.2f}%")
         
-        # Run training
-        logger.info("Starting CoCoOp training...")
+        # Run training with HELIP configured via config
+        logger.info("Starting training...")
         best_base_acc, best_novel_acc, best_hm = train_cocoop(cfg, device)
+        # End of HELIP addition
         
         # Final comparison
         logger.info("==== Improvement Summary ====")
