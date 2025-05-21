@@ -10,10 +10,13 @@ Original file is located at
 Here comes important information about the project**...**
 """
 
-# TO DO - HELIP:
+# TODO - HELIP:
 # 1. Once HELIP is validated by the group, take out all the comments that containt the word "HELIP" (except the ones in the config)
 # 2. To make sure HELIP is actually doing something, the HNML in the logs should be non-zero.
 # 3. The loss should be lower than without HELIP.
+
+# TODO - PromptSRC:
+# 1. Once PromptSRC is validated, delete all the comments that containt the word "PromptSRC"
 
 # configuration
 cfg = {
@@ -43,23 +46,41 @@ cfg = {
         "num_workers": 0,    # Enable parallel data loading when running in cloud, use 2 or 4
         "pin_memory": False  # Idem
     },
-    # HELIP configs
+
     "helip": {
         "enabled": True,
         "k": 5,                # Number of hard pairs to mine per sample, diminishing returns, in the paper they also suggested 3
         "p": 20,               # Number of random pairs to sample
-        "alpha": 0.25,         # Margin parameter for HNML (Hard Negative Mining Loss)
-        "lambda_hnml": 0.5,    # Weight for HNML in the combined loss - 
-                               # TO DO - 1: find a better value for key hyperparam 
-                               # TO DO - 2: balance this lambda with other regularizers lambdas, if all high, we'll underfit 
+        "alpha": 0.05,         # Margin parameter for HNML (Hard Negative Mining Loss) # original: 0.25 # TUNE
+        "lambda_hnml": 0.5,    # Weight for HNML in the combined loss -                                 # TUNE
+                               # TODO - 1: find a better value for key hyperparam 
+                               # TODO - 2: balance this lambda with other regularizers lambdas, if all high, we'll underfit 
                                # (cross-modal consistency, augmentation, etc.)
         "mining_freq": 5,      # Mine hard pairs every N epochs (to avoid mining each epoch)
         "cache_embeddings": True  # Whether to cache embeddings between epochs, to avoid recomputing them
+    },
+    "promptsrc": {
+        "enabled": True,
+        "mutual_agreement": {
+            "lambda_ma": 0.5,        # Weight for mutual agreement loss                                 # TUNE 
+            "temperature": 0.07,     # Temperature scaling parameter
+            "schedule": True         # Enable weight scheduling
+        },
+        "prompt_ensemble": {
+            "enabled": True,
+            "window_size": 5,        # Number of recent prompts to ensemble
+            "sigma": 2.0             # Sigma for Gaussian weighting
+        },
+        "textual_diversity": {
+            "lambda_td": 0.3,        # Weight for textual diversity loss                                # TUNE 
+            "temperature": 0.07,     # Temperature for text similarity
+            "schedule": True         # Enable weight scheduling
+        }
     }
 }
 
 # installing packages, use specific versions
-# TO DO: Make sure HELIP requirements are well included here
+# TODO: Make sure HELIP requirements are well included here
 # !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10
 
 import os
@@ -98,8 +119,10 @@ wandb_run = wandb.init(
     entity="mhevizi-unitn", 
     project="Deep learning project", 
     config=cfg,
-    name=f"CoCoOp_{cfg['base_model']['name']}_{cfg['trainer']['lr']}",
-    tags=["cocoop", cfg["base_model"]["name"]]
+    name=f"CoCoOp_{cfg['base_model']['name']}_{cfg['trainer']['lr']}_HELIP_{cfg['helip']['enabled']}_PromptSRC_{cfg['promptsrc']['enabled']}",
+    tags=["cocoop", cfg["base_model"]["name"], 
+          "helip" if cfg["helip"]["enabled"] else "", 
+          "promptsrc" if cfg["promptsrc"]["enabled"] else ""]
 )
 
 """## Define data loaders; base, novel splits"""
@@ -289,12 +312,12 @@ class HardPairMining:
         self.cache_embeddings = cfg["helip"]["cache_embeddings"]
         self.last_mining_epoch = 0
     
-    # Compute embeddings for pairs in the dataset using CoCoOp's prompt learning mechanism
+
     def _compute_pair_embeddings(self, sample_indices=None):
         if sample_indices is None:
             dataloader = DataLoader(
                 self.dataset, 
-                batch_size=4,  # TO DO: find proper batch size (for now, a very small one to avoid memory issues
+                batch_size=4,  # TODO: find proper batch size (for now, a very small one to avoid memory issues
                 shuffle=False, 
                 num_workers=cfg["data"]["num_workers"]
             )
@@ -303,7 +326,7 @@ class HardPairMining:
             subset = torch.utils.data.Subset(self.dataset, sample_indices)
             dataloader = DataLoader(
                 subset, 
-                batch_size=4, # TO DO: Idem above
+                batch_size=4, # TODO: Idem above
                 shuffle=False, 
                 num_workers=cfg["data"]["num_workers"]
             )
@@ -321,15 +344,12 @@ class HardPairMining:
                 # Important to use CoCoOp's prompt mechanism properly
                 logits = self.model(images)  # This will populate self.model.text_features
                 
-                # Get image features
                 image_features = self.model.image_encoder(images.type(self.model.dtype))
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True)
                 
-                # Now extract the text features which have been stored
-                # The model should compute text features for all classes
                 if self.model.text_features is not None:
                     # For CoCoOp, text_features can have shape [batch_size * num_classes, feature_dim]
-                    # We need to ensure we only take features for this batch
+                    # Ensure we only take features for this batch
                     batch_size = image_features.size(0)
                     
                     # Handle different text_features shapes based on CoCoOp implementation
@@ -346,19 +366,18 @@ class HardPairMining:
                 else:
                     logger.warning("No text features found after forward pass. Skipping batch.")
         
-        # Only create embeddings if we have data
+
         if not all_image_features or not all_text_features:
             logger.error("No embeddings were collected during mining. Check model implementation.")
             return None
             
-        # Create the embeddings dictionary
         embeddings = {
             'image_features': torch.cat(all_image_features),
             'text_features': torch.cat(all_text_features),
             'labels': torch.cat(all_labels)
         }
         
-        # Log shapes for debugging
+
         logger.info(f"Computed embeddings - Images: {embeddings['image_features'].shape}, Text: {embeddings['text_features'].shape}")
         
         # Verify sizes match
@@ -372,7 +391,6 @@ class HardPairMining:
         
         return embeddings
     
-    # Find hard pairs for the given dataset indices using the original HELIP approach
     def mine_hard_pairs(self, dataset_indices, epoch):
         # Check if we need to mine new pairs based on epoch frequency
         if epoch // cfg["helip"]["mining_freq"] == self.last_mining_epoch // cfg["helip"]["mining_freq"] and self.cached_hard_pairs:
@@ -390,7 +408,6 @@ class HardPairMining:
         all_image_features = self.cached_embeddings['image_features']
         all_text_features = self.cached_embeddings['text_features']
         
-        # For each dataset index, find hard pairs
         for target_idx in tqdm(dataset_indices, desc=f"Mining hard pairs for epoch {epoch}"):
             # Convert target_idx to int if it's a tensor
             target_idx_int = target_idx.item() if hasattr(target_idx, 'item') else target_idx
@@ -399,7 +416,7 @@ class HardPairMining:
             target_image_emb = all_image_features[target_idx].to(self.device)
             target_text_emb = all_text_features[target_idx].to(self.device)
             
-            # Randomly sample p candidate pairs (as in original HELIP)
+            # Randomly sample p candidate pairs
             total_samples = len(all_image_features)
             random_indices = torch.randperm(total_samples)[:self.p]
             
@@ -413,8 +430,6 @@ class HardPairMining:
                 candidate_image_emb = all_image_features[idx].to(self.device)
                 candidate_text_emb = all_text_features[idx].to(self.device)
                 
-                # Agreement score as in HELIP paper
-                # Using torch.matmul for scalar products to avoid transpose warning
                 i2t_score = torch.matmul(target_image_emb.flatten(), candidate_text_emb.flatten())
                 t2i_score = torch.matmul(candidate_image_emb.flatten(), target_text_emb.flatten())
                 score = i2t_score + t2i_score
@@ -423,7 +438,6 @@ class HardPairMining:
                 idx_int = idx.item() if hasattr(idx, 'item') else idx
                 agreement_scores.append((idx_int, score.item()))
             
-            # Sort by score (lower is harder) and get top-k hard pairs
             hard_pairs_indices = sorted(agreement_scores, key=lambda x: x[1])[:self.k]
             hard_pairs[target_idx_int] = [idx for idx, _ in hard_pairs_indices]
         
@@ -433,7 +447,6 @@ class HardPairMining:
         
         return hard_pairs
 
-# Compute Hard Negative Margin Loss as described in HELIP's paper
 def hard_negative_margin_loss(image_features, # Normalized image features [batch_size, feature_dim]
                               text_features, # Normalized text features [batch_size, feature_dim]
                               hard_pairs_indices, # Dictionary mapping indices to lists of hard pair indices
@@ -449,11 +462,9 @@ def hard_negative_margin_loss(image_features, # Normalized image features [batch
     pos_idx = torch.arange(batch_size, device=device)
     pos_sim = sim_matrix[pos_idx, pos_idx]
     
-    # Initialize loss
     hnml_loss = torch.tensor(0.0, device=device)
     count = 0
     
-    # Process each sample in the batch
     for i in range(batch_size):
         # Convert sample_idx to int if it's a tensor
         sample_idx = i
@@ -461,7 +472,6 @@ def hard_negative_margin_loss(image_features, # Normalized image features [batch
         if sample_idx not in hard_pairs_indices or not hard_pairs_indices[sample_idx]:
             continue
         
-        # Get hard indices and convert to tensor
         hard_indices_list = hard_pairs_indices[sample_idx]
         hard_indices = torch.tensor(hard_indices_list, device=device)
         
@@ -472,7 +482,7 @@ def hard_negative_margin_loss(image_features, # Normalized image features [batch
             
         hard_indices = hard_indices[batch_mask]
         
-        # Get similarities with hard negative pairs
+        # Smilarities
         hard_neg_sim_i2t = sim_matrix[i, hard_indices]
         hard_neg_sim_t2i = sim_matrix[hard_indices, i]
         
@@ -489,20 +499,147 @@ def hard_negative_margin_loss(image_features, # Normalized image features [batch
     return hnml_loss
 
 
+# Implement Gaussian weighted prompt aggregation from PromptSRC
+# What we're doing here is:
+# 1. Create a history of context vectors
+# 2. Update the history with the current context vectors
+# 3. Create an ensemble of the prompts
+# 4. Use the ensemble as the prompt for the next forward pass
+class PromptEnsemble:
 
+    def __init__(self, window_size=5, sigma=2.0):
+        self.window_size = window_size
+        self.sigma = sigma
+        self.prompt_history = []
+    
+    def update(self, current_prompt):
+        cpu_prompt = current_prompt.detach().clone().cpu()
+        self.prompt_history.append(cpu_prompt)
+        
+        # Keep only window_size most recent prompts
+        if len(self.prompt_history) > self.window_size:
+            self.prompt_history.pop(0)
+    
+    # Create Gaussian-weighted ensemble of prompts
+    def get_ensemble_prompt(self, device):
+        if not self.prompt_history:
+            return None
+            
+        device_prompts = [p.to(device) for p in self.prompt_history]
+        
+        # Compute Gaussian weights favoring recent prompts
+        weights = [torch.exp(-(len(device_prompts)-1-i)**2/(2*self.sigma**2)) 
+                   for i in range(len(device_prompts))]
+        weights = torch.tensor(weights, device=device)
+        weights = weights / weights.sum()
+        
+        # Weighted ensemble
+        ensemble_prompt = sum(w * p for w, p in zip(weights, device_prompts))
+        return ensemble_prompt
+
+
+
+# Implement mutual agreement loss from PromptSRC
+# Goal: Encourage the model to produce text features that are similar to CLIP's original frozen model features
+def mutual_agreement_loss(image_features, text_features, original_image_features, original_text_features, temperature=0.07):
+
+    # Normalize features for cosine similarity
+    image_features = F.normalize(image_features, dim=-1)
+    text_features = F.normalize(text_features, dim=-1)
+    original_image_features = F.normalize(original_image_features, dim=-1)
+    original_text_features = F.normalize(original_text_features, dim=-1)
+    
+    # Compute similarity matrices for prompted and frozen features
+    prompted_logits = (image_features @ text_features.T) / temperature
+    frozen_logits = (original_image_features @ original_text_features.T) / temperature
+    
+    # Convert to probabilty distributions
+    prompted_probs = F.softmax(prompted_logits, dim=-1)
+    frozen_probs = F.softmax(frozen_logits, dim=-1)
+    
+    # Symmetric KL divergence (Jensen-Shannon without the averaging)
+    loss_p_to_f = F.kl_div(prompted_probs.log(), frozen_probs, reduction='batchmean')
+    loss_f_to_p = F.kl_div(frozen_probs.log(), prompted_probs, reduction='batchmean')
+    
+    return loss_p_to_f + loss_f_to_p
+
+
+# Implement Jensen-Shannon divergence from PromptSRC. Goal: encourage diversity in text features
+def textual_diversity_loss(text_features, temperature=0.07):
+
+    text_features = F.normalize(text_features, dim=-1)
+    
+    sim_matrix = (text_features @ text_features.T) / temperature
+    
+    # Compute probability distribution for each text feature
+    probs = F.softmax(sim_matrix, dim=-1)
+    
+    # Compute average distribution (mixture distribution M in JS divergence)
+    avg_probs = probs.mean(dim=0, keepdim=True)
+    
+    # Compute KL divergence between each distribution and average
+    kl_div = F.kl_div(probs.log(), avg_probs.expand_as(probs), reduction='none')
+    reverse_kl = F.kl_div(avg_probs.expand_as(probs).log(), probs, reduction='none')
+    
+    # JS divergence
+    js_div = 0.5 * (kl_div + reverse_kl).sum(dim=-1).mean()
+    
+    return js_div
+
+# Implements scheduling for PromptSRC loss weights. Increase gradually the weights with a warmup phase for more stable training.
+def get_promptsrc_weights(epoch, max_epochs, base_ma=0.5, base_td=0.3):
+    # Linear warmup for first 20% of training
+    warmup_epochs = max_epochs * 0.2
+    
+    if epoch < warmup_epochs:
+        # Gradually increase weights during warmup
+        factor = epoch / warmup_epochs
+        lambda_ma = base_ma * factor
+        lambda_td = base_td * factor
+    else:
+        # Use full weights after warmup
+        lambda_ma = base_ma
+        lambda_td = base_td
+    
+    return lambda_ma, lambda_td
 
 def train_loop(dataloader, model, optimizer, epoch, device, scheduler=None, 
                 # HELIP
-                use_helip=False, # Boolean flag to use or not HELIP
+                use_helip=False,      # Boolean flag to use or not HELIP
                 hard_pair_miner=None, # Hard pair mining module
-                lambda_hnml=0.5 # Weight for hard negative margin loss
+                lambda_hnml=0.5,      # Weight for hard negative margin loss
                 # End of HELIP
+                # Start PromptSRC
+                use_promptsrc=False, # Boolean flag to use PromptSRC
+                base_model=None,     # Original CLIP model for mutual agreement
+                tokenizer=None,      # Tokenizer for encoding class names
+                lambda_ma=0.5,       # Weight for mutual agreement loss
+                lambda_td=0.3,       # Weight for textual diversity loss
+                temperature=0.07,    # Temperature for loss calculation
+                max_epochs=None      # Max epochs for weight scheduling
+                # End PromptSRC
                 ):
 
     model.train()
     total_loss = 0
     total_contrastive_loss = 0
     total_hnml_loss = 0
+    
+    # Start PromptSRC
+    # Initialize tracking for PromptSRC losses
+    total_ma_loss = 0
+    total_td_loss = 0
+    
+    # Get scheduled weights if enabled
+    if use_promptsrc and max_epochs is not None and cfg["promptsrc"]["mutual_agreement"].get("schedule", False):
+        lambda_ma, lambda_td = get_promptsrc_weights(
+            epoch, 
+            max_epochs, 
+            base_ma=cfg["promptsrc"]["mutual_agreement"]["lambda_ma"],
+            base_td=cfg["promptsrc"]["textual_diversity"]["lambda_td"]
+        )
+        logger.info(f"PromptSRC scheduled weights: lambda_ma={lambda_ma:.4f}, lambda_td={lambda_td:.4f}")
+    # End PromptSRC
     
     # Progress bar for training
     progress_bar = tqdm(dataloader, desc=f"Train Epoch {epoch}")
@@ -549,6 +686,17 @@ def train_loop(dataloader, model, optimizer, epoch, device, scheduler=None,
             cont_loss_val = 0.0
             
         total_contrastive_loss += cont_loss_val
+        
+        # Initialize additional losses
+        hnml = torch.tensor(0.0, device=device)
+        hnml_val = 0.0
+        
+        # Initialize PromptSRC losses
+        ma_loss = torch.tensor(0.0, device=device)
+        td_loss = torch.tensor(0.0, device=device)
+        ma_loss_val = 0.0
+        td_loss_val = 0.0
+        # End PromptSRC
         
         # If HELIP is enabled, compute additional hard negative margin loss
         if use_helip and hard_pair_miner is not None and lambda_hnml > 0:
@@ -629,11 +777,63 @@ def train_loop(dataloader, model, optimizer, epoch, device, scheduler=None,
                 loss = contrastive_loss
                 hnml = torch.tensor(0.0, device=device)
                 hnml_val = 0.0
-            
         else:
             loss = contrastive_loss
-            hnml = torch.tensor(0.0, device=device)
-            hnml_val = 0.0
+        
+        # If PromptSRC is enabled, compute mutual agreement and textual diversity losses
+        if use_promptsrc and base_model is not None and model.current_image_features is not None and model.current_text_features is not None:
+
+            batch_size = images.size(0)
+            
+            prompted_image_features = model.current_image_features
+            prompted_text_features = model.current_text_features
+            
+            # Get original model features (frozen)
+            with torch.no_grad():
+                # Get frozen image features
+                original_image_features = base_model.encode_image(images.type(base_model.dtype))
+                original_image_features = original_image_features / original_image_features.norm(dim=-1, keepdim=True)
+                
+                # Get frozen text features
+                original_text_features = base_model.encode_text(tokenizer(
+                    [f"a photo of a {CLASS_NAMES[t.item()]}, a type of flower." for t in targets]
+                ).to(device))
+                original_text_features = original_text_features / original_text_features.norm(dim=-1, keepdim=True)
+            
+            if lambda_ma > 0:
+                ma_loss = mutual_agreement_loss(
+                    prompted_image_features[:batch_size], 
+                    prompted_text_features[:batch_size],
+                    original_image_features, 
+                    original_text_features,
+                    temperature=temperature
+                )
+                
+                # Get scalar value for logging
+                try:
+                    ma_loss_val = ma_loss.item() if isinstance(ma_loss, torch.Tensor) and ma_loss.numel() == 1 else float(ma_loss)
+                    total_ma_loss += ma_loss_val
+                except Exception as e:
+                    logger.warning(f"Error converting mutual agreement loss to scalar: {e}")
+                    ma_loss_val = 0.0
+            
+            if lambda_td > 0:
+                td_loss = textual_diversity_loss(
+                    prompted_text_features[:batch_size], 
+                    temperature=temperature
+                )
+                
+                # Get scalar value for logging
+                try:
+                    td_loss_val = td_loss.item() if isinstance(td_loss, torch.Tensor) and td_loss.numel() == 1 else float(td_loss)
+                    total_td_loss += td_loss_val
+                except Exception as e:
+                    logger.warning(f"Error converting textual diversity loss to scalar: {e}")
+                    td_loss_val = 0.0
+            
+            # Add PromptSRC losses to total loss
+            loss = loss + lambda_ma * ma_loss + lambda_td * td_loss
+        # Closing PromptSRC
         
         # Final check to ensure loss is a scalar with gradients before backward
         if isinstance(loss, torch.Tensor) and loss.dim() > 0:
@@ -655,8 +855,52 @@ def train_loop(dataloader, model, optimizer, epoch, device, scheduler=None,
         total_loss += loss_val
         
         # Update progress bar
-        # HELIP
-        if use_helip:
+        # Start PromptSRC
+        if use_promptsrc and use_helip:
+            # Both PromptSRC and HELIP enabled
+            progress_bar.set_postfix({
+                'loss': f"{loss_val:.4f}",
+                'cont_loss': f"{cont_loss_val:.4f}",
+                'ma_loss': f"{ma_loss_val:.4f}",
+                'td_loss': f"{td_loss_val:.4f}",
+                'hnml': f"{hnml_val:.4f}",
+                'avg_loss': f"{total_loss / (batch_idx + 1):.4f}",
+            })
+            
+            # Log to wandb
+            wandb_run.log({
+                "train_loss": loss_val,
+                "contrastive_loss": cont_loss_val,
+                "mutual_agreement_loss": ma_loss_val,
+                "textual_diversity_loss": td_loss_val,
+                "hnml": hnml_val,
+                "train_avg_loss": total_loss / (batch_idx + 1),
+                "learning_rate": optimizer.param_groups[0]['lr'],
+                "lambda_ma": lambda_ma,
+                "lambda_td": lambda_td,
+            })
+        elif use_promptsrc:
+            # Only PromptSRC enabled
+            progress_bar.set_postfix({
+                'loss': f"{loss_val:.4f}",
+                'cont_loss': f"{cont_loss_val:.4f}",
+                'ma_loss': f"{ma_loss_val:.4f}",
+                'td_loss': f"{td_loss_val:.4f}",
+                'avg_loss': f"{total_loss / (batch_idx + 1):.4f}",
+            })
+            
+            wandb_run.log({
+                "train_loss": loss_val,
+                "contrastive_loss": cont_loss_val,
+                "mutual_agreement_loss": ma_loss_val,
+                "textual_diversity_loss": td_loss_val,
+                "train_avg_loss": total_loss / (batch_idx + 1),
+                "learning_rate": optimizer.param_groups[0]['lr'],
+                "lambda_ma": lambda_ma,
+                "lambda_td": lambda_td,
+            })
+        # End PromptSRC
+        elif use_helip:
             progress_bar.set_postfix({
                 'loss': f"{loss_val:.4f}",
                 'cont_loss': f"{cont_loss_val:.4f}",
@@ -664,7 +908,6 @@ def train_loop(dataloader, model, optimizer, epoch, device, scheduler=None,
                 'avg_loss': f"{total_loss / (batch_idx + 1):.4f}",
             })
             
-            # Log to wandb
             wandb_run.log({
                 "train_loss": loss_val,
                 "contrastive_loss": cont_loss_val,
@@ -678,7 +921,6 @@ def train_loop(dataloader, model, optimizer, epoch, device, scheduler=None,
                 'avg_loss': f"{total_loss / (batch_idx + 1):.4f}",
             })
             
-            # Log to wandb
             wandb_run.log({
                 "train_loss": loss_val,
                 "train_avg_loss": total_loss / (batch_idx + 1),
@@ -686,7 +928,6 @@ def train_loop(dataloader, model, optimizer, epoch, device, scheduler=None,
             })
         # End of HELIP
     
-    # Step the scheduler if provided
     if scheduler is not None:
         scheduler.step()
     
@@ -694,8 +935,28 @@ def train_loop(dataloader, model, optimizer, epoch, device, scheduler=None,
     avg_loss = total_loss / len(dataloader)
     avg_contrastive_loss = total_contrastive_loss / len(dataloader)
     
-    # HELIP
-    if use_helip:
+    # Start PromptSRC & HELIP
+    # Log all loss components
+    if use_promptsrc and use_helip:
+        avg_hnml_loss = total_hnml_loss / len(dataloader) if lambda_hnml > 0 else 0.0
+        avg_ma_loss = total_ma_loss / len(dataloader) if lambda_ma > 0 else 0.0
+        avg_td_loss = total_td_loss / len(dataloader) if lambda_td > 0 else 0.0
+        
+        logger.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}, "
+                    f"Contrastive Loss: {avg_contrastive_loss:.4f}, "
+                    f"MA Loss: {avg_ma_loss:.4f}, "
+                    f"TD Loss: {avg_td_loss:.4f}, "
+                    f"HNML: {avg_hnml_loss:.4f}")
+    elif use_promptsrc:
+        avg_ma_loss = total_ma_loss / len(dataloader) if lambda_ma > 0 else 0.0
+        avg_td_loss = total_td_loss / len(dataloader) if lambda_td > 0 else 0.0
+        
+        logger.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}, "
+                    f"Contrastive Loss: {avg_contrastive_loss:.4f}, "
+                    f"MA Loss: {avg_ma_loss:.4f}, "
+                    f"TD Loss: {avg_td_loss:.4f}")
+    # End PromptSRC
+    elif use_helip:
         avg_hnml_loss = total_hnml_loss / len(dataloader) if lambda_hnml > 0 else 0.0
         
         logger.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}, "
@@ -905,6 +1166,16 @@ class PromptLearner(torch.nn.Module):
         cfg_imsize = cfg["input"]["size"][0]
         assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
 
+        # Start PromptSRC
+        # Initialize prompt ensemble if enabled
+        self.prompt_ensemble_enabled = cfg.get("promptsrc", {}).get("prompt_ensemble", {}).get("enabled", False)
+        if self.prompt_ensemble_enabled:
+            window_size = cfg["promptsrc"]["prompt_ensemble"]["window_size"]
+            sigma = cfg["promptsrc"]["prompt_ensemble"]["sigma"]
+            self.prompt_ensemble = PromptEnsemble(window_size=window_size, sigma=sigma)
+            logger.info(f"Initialized PromptSRC ensemble with window_size={window_size}, sigma={sigma}")
+        # End PromptSRC
+
         if ctx_init:
             # use given words to initialize context vectors
             ctx_init = ctx_init.replace("_", " ")
@@ -990,6 +1261,19 @@ class PromptLearner(torch.nn.Module):
         ctx = ctx.unsqueeze(0)             # (1, n_ctx, ctx_dim)
         ctx_shifted = ctx + bias           # (batch, n_ctx, ctx_dim)
         
+        # Start PromptSRC
+        # Update prompt ensemble with current context
+        if self.prompt_ensemble_enabled and self.training:
+
+            self.prompt_ensemble.update(ctx_shifted)
+            
+            # Get ensemble prompt if available
+            ensemble_ctx = self.prompt_ensemble.get_ensemble_prompt(ctx_shifted.device)
+            if ensemble_ctx is not None:
+                # Use ensemble context instead of current one during training
+                ctx_shifted = ensemble_ctx
+        # End PromptSRC
+        
         # Use instance-conditioned context tokens for all classes
         prompts = []
         for ctx_shifted_i in ctx_shifted:
@@ -1004,7 +1288,7 @@ class PromptLearner(torch.nn.Module):
 class CustomCLIP(torch.nn.Module):
     def __init__(self, cfg, classnames, clip_model, tokenizer, device):
         super().__init__()
-        self.prompt_learner = PromptLearner(cfg, classnames, clip_model, tokenizer, device) #don't we need this tokenizer here?
+        self.prompt_learner = PromptLearner(cfg, classnames, clip_model, tokenizer, device)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(clip_model, device)
@@ -1013,6 +1297,13 @@ class CustomCLIP(torch.nn.Module):
         self.device = device
         # HELIP: Store the text features for later use
         self.text_features = None
+        
+        # Start PromptSRC
+        # Additional storage for text features at different stages of processing
+        self.current_text_features = None
+        self.current_image_features = None
+        self.classnames = classnames
+        # End PromptSRC
     
     def forward(self, image, label=None):
         tokenized_prompts = self.tokenized_prompts
@@ -1021,6 +1312,11 @@ class CustomCLIP(torch.nn.Module):
         # Use the default precision for image features
         image_features = self.image_encoder(image.type(self.dtype))
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        
+        # Start PromptSRC
+        # Store image features for loss computation
+        self.current_image_features = image_features
+        # End PromptSRC
         
         # If meta_net is using half precision, convert image_features to half precision for the prompt learner
         if getattr(self.prompt_learner, 'meta_net', None) is not None and next(self.prompt_learner.meta_net.parameters()).dtype == torch.float16:
@@ -1047,6 +1343,10 @@ class CustomCLIP(torch.nn.Module):
         
         # HELIP: Store text features for later use in compute_similarity
         self.text_features = torch.cat(all_text_features)
+        
+        # Save current batch of text features for PromptSRC's loss computation
+        self.current_text_features = self.text_features
+        # PromptSRC
         
         if self.prompt_learner.training:
             if label is not None:
@@ -1087,6 +1387,23 @@ class CustomCLIP(torch.nn.Module):
         logits_per_text = logits_per_image.T
         
         return logits_per_image, logits_per_text
+        
+    # Start PromptSRC
+    # Use the frozen text encoder to generate text features. Necessary for PromptSRC's mutual agreement loss.
+    def get_text_features_for_classes(self, class_indices, tokenizer):
+
+        # Format prompts with template
+        prompts = [f"a photo of a {self.classnames[idx]}, a type of flower." for idx in class_indices]
+        
+        text_inputs = tokenizer(prompts).to(self.device)
+        
+        # Forward through text encoder
+        with torch.no_grad():
+            text_features = self.text_encoder(text_inputs, text_inputs)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            
+        return text_features
+    # End PromptSRC
 
 
 def create_base_model(device):
@@ -1121,7 +1438,7 @@ print(base_model)
 """
 
 # Create data augmentation for training 
-# TO DO: Explore better augmentations, this is just boiler-plate 
+# TODO: Explore better augmentations, this is just boiler-plate 
 train_transform = torchvision.transforms.Compose([
     torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
     torchvision.transforms.RandomHorizontalFlip(),
@@ -1162,7 +1479,7 @@ def get_optimizer_and_scheduler(model, cfg):
     
     # Use warmup
     if cfg["trainer"]["warmup_epochs"] > 0:
-        scheduler = torch.optim.lr_scheduler.LinearLR( # TO DO: Explore better warmups
+        scheduler = torch.optim.lr_scheduler.LinearLR( # TODO: Explore better warmups
             optimizer, 
             start_factor=0.01,
             end_factor=1.0,
@@ -1271,22 +1588,36 @@ def train_cocoop(cfg, device):
     # Check if HELIP is enabled
     helip_enabled = cfg.get("helip", {}).get("enabled", False)
     
-    if helip_enabled:
+    # Start PromptSRC
+    # Check if PromptSRC is enabled
+    promptsrc_enabled = cfg.get("promptsrc", {}).get("enabled", False)
+    
+    if promptsrc_enabled and helip_enabled:
+        logger.info("==== Starting CoCoOp Training with PromptSRC and HELIP ====")
+    elif promptsrc_enabled:
+        logger.info("==== Starting CoCoOp Training with PromptSRC ====")
+    # End PromptSRC
+    elif helip_enabled:
         logger.info("==== Starting CoCoOp Training with HELIP ====")
     else:
         logger.info("==== Starting CoCoOp Training ====")
-    # End of HELIP part
         
     logger.info(f"Config: {cfg}")
     
-    # Set random seed for reproducibility
     torch.manual_seed(42)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(42)
     
-    # Create models
     logger.info("Creating models...")
     base_model, base_preprocess, tokenizer = create_base_model(device)
+    
+    # For PromptSRC, keep base model on device for mutual agreement loss
+    if promptsrc_enabled:
+        base_model = base_model.to(device)
+        base_model.eval()  # Keep base model in eval mode
+        logger.info("Base model loaded for PromptSRC mutual agreement")
+    # End PromptSRC
+    
     custom_model, _, _ = create_custom_model(device)
     custom_model = custom_model.to(device)
     
@@ -1341,6 +1672,19 @@ def train_cocoop(cfg, device):
     else:
         logger.info("HELIP is disabled, using standard training")
     
+    # Extract PromptSRC parameters if enabled
+    if promptsrc_enabled:
+        logger.info("PromptSRC is enabled for training")
+        mutual_agreement_cfg = cfg["promptsrc"]["mutual_agreement"]
+        textual_diversity_cfg = cfg["promptsrc"]["textual_diversity"]
+        
+        lambda_ma = mutual_agreement_cfg["lambda_ma"]
+        lambda_td = textual_diversity_cfg["lambda_td"]
+        temperature = mutual_agreement_cfg["temperature"]
+        
+        logger.info(f"PromptSRC parameters: lambda_ma={lambda_ma}, lambda_td={lambda_td}, temperature={temperature}")
+    # End PromptSRC
+    
     # Training setup
     start_epoch = 0
     best_accuracy = 0.0
@@ -1390,7 +1734,16 @@ def train_cocoop(cfg, device):
                 scheduler=scheduler,
                 use_helip=helip_enabled,
                 hard_pair_miner=hard_pair_miner,
-                lambda_hnml=cfg["helip"].get("lambda_hnml", 0.5) if helip_enabled else 0.0
+                lambda_hnml=cfg["helip"].get("lambda_hnml", 0.5) if helip_enabled else 0.0,
+                # PromptSRC
+                use_promptsrc=promptsrc_enabled,
+                base_model=base_model if promptsrc_enabled else None,
+                tokenizer=tokenizer if promptsrc_enabled else None,
+                lambda_ma=mutual_agreement_cfg["lambda_ma"] if promptsrc_enabled else 0.0,
+                lambda_td=textual_diversity_cfg["lambda_td"] if promptsrc_enabled else 0.0,
+                temperature=mutual_agreement_cfg["temperature"] if promptsrc_enabled else 0.07,
+                max_epochs=cfg["trainer"]["epochs"]
+                # End PromptSRC
             )
             
             # Evaluate on validation set
@@ -1488,7 +1841,6 @@ def train_cocoop(cfg, device):
     
     # Return best results
     return best_base_acc, best_novel_acc, best_hm
-# End of HELIP part
 
 def main():
     """Main function that ties everything together."""

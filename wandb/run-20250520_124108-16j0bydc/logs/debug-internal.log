@@ -1,0 +1,7 @@
+{"time":"2025-05-20T12:41:08.227179913+02:00","level":"INFO","msg":"stream: starting","core version":"0.19.10","symlink path":"/home/joaquin_l_calvo/projects/DL2024/deeplearning/wandb/run-20250520_124108-16j0bydc/logs/debug-core.log"}
+{"time":"2025-05-20T12:41:11.057662158+02:00","level":"INFO","msg":"created new stream","id":"16j0bydc"}
+{"time":"2025-05-20T12:41:11.057698993+02:00","level":"INFO","msg":"stream: started","id":"16j0bydc"}
+{"time":"2025-05-20T12:41:11.057788798+02:00","level":"INFO","msg":"writer: Do: started","stream_id":"16j0bydc"}
+{"time":"2025-05-20T12:41:11.057836428+02:00","level":"INFO","msg":"handler: started","stream_id":"16j0bydc"}
+{"time":"2025-05-20T12:41:11.058094898+02:00","level":"INFO","msg":"sender: started","stream_id":"16j0bydc"}
+{"time":"2025-05-20T12:41:11.360959039+02:00","level":"INFO","msg":"Starting system monitor"}
