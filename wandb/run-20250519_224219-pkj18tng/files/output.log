@@ -1,0 +1,100 @@
+Using cuda device
+2025-05-19 22:42:20,106 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:42:21,541 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:42:21,759 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:42:22,693 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+Initial context: "X X X X X X X X"
+Number of context words (tokens): 8
+CLIP(
+  (visual): VisionTransformer(
+    (conv1): Conv2d(3, 768, kernel_size=(32, 32), stride=(32, 32), bias=False)
+    (patch_dropout): Identity()
+    (ln_pre): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+    (transformer): Transformer(
+      (resblocks): ModuleList(
+        (0-11): 12 x ResidualAttentionBlock(
+          (ln_1): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+          (attn): MultiheadAttention(
+            (out_proj): NonDynamicallyQuantizableLinear(in_features=768, out_features=768, bias=True)
+          )
+          (ls_1): Identity()
+          (ln_2): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+          (mlp): Sequential(
+            (c_fc): Linear(in_features=768, out_features=3072, bias=True)
+            (gelu): GELU(approximate='none')
+            (c_proj): Linear(in_features=3072, out_features=768, bias=True)
+          )
+          (ls_2): Identity()
+        )
+      )
+    )
+    (ln_post): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+  )
+  (transformer): Transformer(
+    (resblocks): ModuleList(
+      (0-11): 12 x ResidualAttentionBlock(
+        (ln_1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+        (attn): MultiheadAttention(
+          (out_proj): NonDynamicallyQuantizableLinear(in_features=512, out_features=512, bias=True)
+        )
+        (ls_1): Identity()
+        (ln_2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+        (mlp): Sequential(
+          (c_fc): Linear(in_features=512, out_features=2048, bias=True)
+          (gelu): GELU(approximate='none')
+          (c_proj): Linear(in_features=2048, out_features=512, bias=True)
+        )
+        (ls_2): Identity()
+      )
+    )
+  )
+  (token_embedding): Embedding(49408, 512)
+  (ln_final): LayerNorm((512,), eps=1e-05, elementwise_affine=True)
+)
+2025-05-19 22:42:22,914 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 22:42:23,028 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 22:42:23,028 - cocoop_training - INFO - Using cuda device
+2025-05-19 22:42:23,029 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:42:24,094 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:42:24,268 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 22:42:24,281 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 22:42:24,282 - cocoop_training - INFO - Running initial zero-shot evaluation...
+🧠 Zero-shot evaluation on Base Classes: 100%|███████████████████████████████████████████████████| 20/20 [00:59<00:00,  2.95s/it]
+🧠 Zero-shot evaluation on Novel Classes: 100%|██████████████████████████████████████████████████| 29/29 [01:47<00:00,  3.72s/it]
+2025-05-19 22:45:11,879 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-19 22:45:11,880 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-19 22:45:11,880 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-19 22:45:11,880 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-19 22:45:11,880 - cocoop_training - INFO - Starting training...
+2025-05-19 22:45:11,881 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-19 22:45:11,881 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-19 22:45:11,884 - cocoop_training - INFO - Creating models...
+2025-05-19 22:45:11,885 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:45:13,572 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:45:13,995 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:45:15,494 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+Initial context: "X X X X X X X X"
+Number of context words (tokens): 8
+2025-05-19 22:45:15,807 - cocoop_training - INFO - Loading datasets...
+2025-05-19 22:45:15,808 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 22:45:15,842 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 22:45:15,848 - cocoop_training - INFO - Creating dataloaders...
+2025-05-19 22:45:15,849 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-19 22:45:15,849 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-19 22:45:15,851 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-19 22:45:15,857 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-05-19 22:45:15,889 - faiss.loader - INFO - Successfully loaded faiss with AVX2 support.
+2025-05-19 22:45:15,896 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes. This is only an error if you're trying to use GPU Faiss.
+2025-05-19 22:45:15,896 - cocoop_training - INFO - FAISS available for efficient hard pair mining
+2025-05-19 22:45:15,897 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+Epoch 0 - Base Classes: 100%|████████████████████████████████████████████████████████████████████| 20/20 [02:01<00:00,  6.06s/it]
+Epoch 0 - Novel Classes: 100%|███████████████████████████████████████████████████████████████████| 29/29 [02:56<00:00,  6.08s/it]
+2025-05-19 22:50:15,220 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-19 22:50:15,221 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-19 22:50:15,221 - cocoop_training - INFO - Starting training...
+Train Epoch 1:   0%|                                                                                     | 0/127 [00:00<?, ?it/s]2025-05-19 22:50:15,223 - cocoop_training - INFO - Computing embeddings for hard pair mining
+Computing embeddings for HELIP: 100%|██████████████████████████████████████████████████████████| 128/128 [13:49<00:00,  6.48s/it]
+2025-05-19 23:04:04,463 - cocoop_training - ERROR - Error during training: Sizes of tensors must match except in dimension 1. Expected size 510 but got size 52020 for tensor number 1 in the list.
+2025-05-19 23:04:05,783 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-19 23:04:05,784 - cocoop_training - ERROR - Error in main execution: Sizes of tensors must match except in dimension 1. Expected size 510 but got size 52020 for tensor number 1 in the list.
+2025-05-19 23:04:05,784 - cocoop_training - INFO - Finishing wandb run...

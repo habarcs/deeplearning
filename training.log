@@ -1,0 +1,533 @@
+2025-05-19 20:02:08,518 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:02:12,094 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:02:13,119 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:02:15,425 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:02:15,979 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:02:16,243 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:02:16,245 - cocoop_training - INFO - Using cuda device
+2025-05-19 20:02:16,245 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:02:18,578 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:02:18,969 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:02:19,012 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:02:19,013 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-19 20:05:36,062 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-19 20:05:36,063 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-19 20:05:36,063 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-19 20:05:36,063 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-19 20:05:36,063 - cocoop_training - INFO - Starting training...
+2025-05-19 20:05:36,063 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-19 20:05:36,063 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-19 20:05:36,065 - cocoop_training - INFO - Creating models...
+2025-05-19 20:05:36,065 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:05:37,797 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:05:38,098 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:05:40,206 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:05:40,401 - cocoop_training - INFO - Loading datasets...
+2025-05-19 20:05:40,402 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:05:40,417 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:05:40,420 - cocoop_training - INFO - Creating dataloaders...
+2025-05-19 20:05:40,420 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-19 20:05:40,420 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-19 20:05:40,421 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-19 20:05:40,422 - cocoop_training - WARNING - FAISS not available. Falling back to brute force search
+2025-05-19 20:05:40,422 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-19 20:10:36,153 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-19 20:10:36,153 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-19 20:10:36,154 - cocoop_training - INFO - Starting training...
+2025-05-19 20:10:36,154 - cocoop_training - ERROR - Error during training: train_loop() got an unexpected keyword argument 'use_helip'
+2025-05-19 20:10:36,781 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-19 20:10:36,782 - cocoop_training - ERROR - Error in main execution: train_loop() got an unexpected keyword argument 'use_helip'
+2025-05-19 20:10:36,782 - cocoop_training - INFO - Finishing wandb run...
+2025-05-19 20:17:58,839 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:18:00,521 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:18:00,752 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:18:01,838 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:18:02,100 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:18:02,135 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:21:48,517 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:21:50,314 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:21:50,535 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:21:51,983 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:21:52,222 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:21:52,363 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:21:52,363 - cocoop_training - INFO - Using cuda device
+2025-05-19 20:21:52,364 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:21:53,469 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:21:53,661 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:21:53,678 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:21:53,678 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-19 20:25:25,600 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-19 20:25:25,600 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-19 20:25:25,600 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-19 20:25:25,600 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-19 20:25:25,600 - cocoop_training - INFO - Starting training...
+2025-05-19 20:25:25,601 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-19 20:25:25,601 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-19 20:25:25,602 - cocoop_training - INFO - Creating models...
+2025-05-19 20:25:25,602 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:25:27,027 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:25:27,283 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:25:28,779 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:25:29,037 - cocoop_training - INFO - Loading datasets...
+2025-05-19 20:25:29,037 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:25:29,063 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:25:29,068 - cocoop_training - INFO - Creating dataloaders...
+2025-05-19 20:25:29,069 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-19 20:25:29,069 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-19 20:25:29,070 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-19 20:25:29,071 - cocoop_training - WARNING - FAISS not available. Falling back to brute force search
+2025-05-19 20:25:29,071 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-19 20:30:24,428 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-19 20:30:24,429 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-19 20:30:24,429 - cocoop_training - INFO - Starting training...
+2025-05-19 20:30:24,430 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-19 20:30:25,870 - cocoop_training - ERROR - Error during training: permute(sparse_coo): number of dimensions in the tensor input does not match the length of the desired ordering of dimensions i.e. input.dim() = 4 is not equal to len(dims) = 3
+2025-05-19 20:30:26,998 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-19 20:30:26,999 - cocoop_training - ERROR - Error in main execution: permute(sparse_coo): number of dimensions in the tensor input does not match the length of the desired ordering of dimensions i.e. input.dim() = 4 is not equal to len(dims) = 3
+2025-05-19 20:30:26,999 - cocoop_training - INFO - Finishing wandb run...
+2025-05-19 20:35:31,042 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:35:32,513 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:35:32,706 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:35:33,686 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:35:33,915 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:35:33,938 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:35:47,935 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:35:49,658 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:35:49,854 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:35:51,018 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:35:51,262 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:35:51,287 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:35:51,288 - cocoop_training - INFO - Using cuda device
+2025-05-19 20:35:51,288 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:35:52,459 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:35:52,647 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:35:52,662 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:35:52,662 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-19 20:39:39,889 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-19 20:39:39,889 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-19 20:39:39,889 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-19 20:39:39,889 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-19 20:39:39,889 - cocoop_training - INFO - Starting training...
+2025-05-19 20:39:39,889 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-19 20:39:39,890 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-19 20:39:39,891 - cocoop_training - INFO - Creating models...
+2025-05-19 20:39:39,891 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:39:41,304 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:39:41,561 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 20:39:43,318 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 20:39:43,608 - cocoop_training - INFO - Loading datasets...
+2025-05-19 20:39:43,609 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 20:39:43,635 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 20:39:43,641 - cocoop_training - INFO - Creating dataloaders...
+2025-05-19 20:39:43,641 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-19 20:39:43,642 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-19 20:39:43,643 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-19 20:39:43,644 - cocoop_training - WARNING - FAISS not available. Falling back to brute force search
+2025-05-19 20:39:43,644 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-19 20:44:39,546 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-19 20:44:39,547 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-19 20:44:39,547 - cocoop_training - INFO - Starting training...
+2025-05-19 20:44:39,548 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-19 20:59:37,134 - cocoop_training - ERROR - Error during training: 'int' object has no attribute 'item'
+2025-05-19 20:59:37,965 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-19 20:59:37,966 - cocoop_training - ERROR - Error in main execution: 'int' object has no attribute 'item'
+2025-05-19 20:59:37,966 - cocoop_training - INFO - Finishing wandb run...
+2025-05-19 22:11:05,299 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:11:06,882 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:11:07,299 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:11:09,210 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:11:09,551 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 22:11:09,722 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 22:11:09,723 - cocoop_training - INFO - Using cuda device
+2025-05-19 22:11:09,723 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:11:10,870 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:11:11,104 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 22:11:11,121 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 22:11:11,122 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-19 22:14:29,940 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-19 22:14:29,941 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-19 22:14:29,941 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-19 22:14:29,941 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-19 22:14:29,941 - cocoop_training - INFO - Starting training...
+2025-05-19 22:14:29,941 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-19 22:14:29,941 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-19 22:14:29,943 - cocoop_training - INFO - Creating models...
+2025-05-19 22:14:29,943 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:14:31,419 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:14:31,713 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:14:33,233 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:14:33,467 - cocoop_training - INFO - Loading datasets...
+2025-05-19 22:14:33,468 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 22:14:33,488 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 22:14:33,492 - cocoop_training - INFO - Creating dataloaders...
+2025-05-19 22:14:33,492 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-19 22:14:33,493 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-19 22:14:33,494 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-19 22:14:33,494 - cocoop_training - WARNING - FAISS not available. Falling back to brute force search
+2025-05-19 22:14:33,495 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-19 22:19:33,688 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-19 22:19:33,689 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-19 22:19:33,689 - cocoop_training - INFO - Starting training...
+2025-05-19 22:19:33,690 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-19 22:31:46,291 - cocoop_training - ERROR - Error during training: 'int' object has no attribute 'item'
+2025-05-19 22:31:49,226 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-19 22:31:49,227 - cocoop_training - ERROR - Error in main execution: 'int' object has no attribute 'item'
+2025-05-19 22:31:49,228 - cocoop_training - INFO - Finishing wandb run...
+2025-05-19 22:42:20,106 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:42:21,541 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:42:21,759 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:42:22,693 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:42:22,914 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 22:42:23,028 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 22:42:23,028 - cocoop_training - INFO - Using cuda device
+2025-05-19 22:42:23,029 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:42:24,094 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:42:24,268 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 22:42:24,281 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 22:42:24,282 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-19 22:45:11,879 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-19 22:45:11,880 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-19 22:45:11,880 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-19 22:45:11,880 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-19 22:45:11,880 - cocoop_training - INFO - Starting training...
+2025-05-19 22:45:11,881 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-19 22:45:11,881 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-19 22:45:11,884 - cocoop_training - INFO - Creating models...
+2025-05-19 22:45:11,885 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:45:13,572 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:45:13,995 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 22:45:15,494 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 22:45:15,807 - cocoop_training - INFO - Loading datasets...
+2025-05-19 22:45:15,808 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 22:45:15,842 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 22:45:15,848 - cocoop_training - INFO - Creating dataloaders...
+2025-05-19 22:45:15,849 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-19 22:45:15,849 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-19 22:45:15,851 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-19 22:45:15,857 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-05-19 22:45:15,889 - faiss.loader - INFO - Successfully loaded faiss with AVX2 support.
+2025-05-19 22:45:15,896 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes. This is only an error if you're trying to use GPU Faiss.
+2025-05-19 22:45:15,896 - cocoop_training - INFO - FAISS available for efficient hard pair mining
+2025-05-19 22:45:15,897 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-19 22:50:15,220 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-19 22:50:15,221 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-19 22:50:15,221 - cocoop_training - INFO - Starting training...
+2025-05-19 22:50:15,223 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-19 23:04:04,463 - cocoop_training - ERROR - Error during training: Sizes of tensors must match except in dimension 1. Expected size 510 but got size 52020 for tensor number 1 in the list.
+2025-05-19 23:04:05,783 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-19 23:04:05,784 - cocoop_training - ERROR - Error in main execution: Sizes of tensors must match except in dimension 1. Expected size 510 but got size 52020 for tensor number 1 in the list.
+2025-05-19 23:04:05,784 - cocoop_training - INFO - Finishing wandb run...
+2025-05-19 23:08:06,118 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 23:08:10,671 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 23:08:11,404 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 23:08:14,172 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 23:08:14,625 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 23:08:14,702 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 23:08:38,695 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 23:08:40,633 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 23:08:40,874 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 23:08:42,644 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 23:08:42,974 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 23:08:43,014 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 23:08:43,015 - cocoop_training - INFO - Using cuda device
+2025-05-19 23:08:43,015 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 23:08:46,436 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 23:08:46,901 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 23:08:46,922 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 23:08:46,923 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-19 23:11:51,586 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-19 23:11:51,587 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-19 23:11:51,587 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-19 23:11:51,587 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-19 23:11:51,587 - cocoop_training - INFO - Starting training...
+2025-05-19 23:11:51,587 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-19 23:11:51,588 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-19 23:11:51,591 - cocoop_training - INFO - Creating models...
+2025-05-19 23:11:51,591 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 23:11:53,411 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 23:11:53,658 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-19 23:11:55,408 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-19 23:11:55,727 - cocoop_training - INFO - Loading datasets...
+2025-05-19 23:11:55,727 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-19 23:11:55,757 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-19 23:11:55,763 - cocoop_training - INFO - Creating dataloaders...
+2025-05-19 23:11:55,764 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-19 23:11:55,764 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-19 23:11:55,766 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-19 23:11:55,768 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-05-19 23:11:55,796 - faiss.loader - INFO - Successfully loaded faiss with AVX2 support.
+2025-05-19 23:11:55,802 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes. This is only an error if you're trying to use GPU Faiss.
+2025-05-19 23:11:55,803 - cocoop_training - INFO - FAISS available for efficient hard pair mining
+2025-05-19 23:11:55,803 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-19 23:14:10,807 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-19 23:14:10,808 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-19 23:14:10,808 - cocoop_training - INFO - Starting training...
+2025-05-19 23:14:10,810 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-19 23:23:02,356 - cocoop_training - ERROR - Error during training: a Tensor with 408 elements cannot be converted to Scalar
+2025-05-19 23:23:03,661 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-19 23:23:03,662 - cocoop_training - ERROR - Error in main execution: a Tensor with 408 elements cannot be converted to Scalar
+2025-05-19 23:23:03,662 - cocoop_training - INFO - Finishing wandb run...
+2025-05-20 10:58:07,243 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 10:58:08,983 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 10:58:09,405 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 10:58:10,821 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 10:58:11,304 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 10:58:11,344 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 10:58:11,344 - cocoop_training - INFO - Using cuda device
+2025-05-20 10:58:11,345 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 10:58:12,526 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 10:58:12,788 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 10:58:12,803 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 10:58:12,803 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-20 11:02:05,140 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-20 11:02:05,140 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-20 11:02:05,141 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-20 11:02:05,141 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-20 11:02:05,141 - cocoop_training - INFO - Starting training...
+2025-05-20 11:02:05,141 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-20 11:02:05,141 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-20 11:02:05,145 - cocoop_training - INFO - Creating models...
+2025-05-20 11:02:05,145 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 11:02:07,465 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 11:02:08,164 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 11:02:09,647 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 11:02:10,077 - cocoop_training - INFO - Loading datasets...
+2025-05-20 11:02:10,078 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 11:02:10,118 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 11:02:10,127 - cocoop_training - INFO - Creating dataloaders...
+2025-05-20 11:02:10,128 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-20 11:02:10,129 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-20 11:02:10,132 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-20 11:02:10,138 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-05-20 11:02:10,208 - faiss.loader - INFO - Successfully loaded faiss with AVX2 support.
+2025-05-20 11:02:10,216 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes. This is only an error if you're trying to use GPU Faiss.
+2025-05-20 11:02:10,217 - cocoop_training - INFO - FAISS available for efficient hard pair mining
+2025-05-20 11:02:10,217 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-20 11:04:58,716 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-20 11:04:58,717 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-20 11:04:58,718 - cocoop_training - INFO - Starting training...
+2025-05-20 11:04:58,720 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-20 11:19:10,578 - cocoop_training - WARNING - Contrastive loss is not a scalar (shape: torch.Size([4, 102])). Using mean for logging.
+2025-05-20 11:19:10,951 - cocoop_training - ERROR - Error during training: element 0 of tensors does not require grad and does not have a grad_fn
+2025-05-20 11:19:12,272 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-20 11:19:12,273 - cocoop_training - ERROR - Error in main execution: element 0 of tensors does not require grad and does not have a grad_fn
+2025-05-20 11:19:12,273 - cocoop_training - INFO - Finishing wandb run...
+2025-05-20 11:28:51,607 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 11:29:01,534 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 11:29:06,611 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 11:29:09,240 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 11:29:11,567 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 11:29:11,652 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 11:29:11,653 - cocoop_training - INFO - Using cuda device
+2025-05-20 11:29:11,654 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 11:29:13,471 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 11:29:15,622 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 11:29:15,668 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 11:29:15,670 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-20 11:34:57,343 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-20 11:34:57,355 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-20 11:34:57,368 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-20 11:34:57,370 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-20 11:34:57,384 - cocoop_training - INFO - Starting training...
+2025-05-20 11:34:57,404 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-20 11:34:57,408 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-20 11:34:57,838 - cocoop_training - INFO - Creating models...
+2025-05-20 11:34:57,873 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 11:35:05,240 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 11:35:07,030 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 11:35:11,147 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 11:35:13,352 - cocoop_training - INFO - Loading datasets...
+2025-05-20 11:35:13,359 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 11:35:13,401 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 11:35:13,413 - cocoop_training - INFO - Creating dataloaders...
+2025-05-20 11:35:13,414 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-20 11:35:13,414 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-20 11:35:13,416 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-20 11:35:13,437 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-05-20 11:35:13,516 - faiss.loader - INFO - Successfully loaded faiss with AVX2 support.
+2025-05-20 11:35:13,526 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes. This is only an error if you're trying to use GPU Faiss.
+2025-05-20 11:35:13,527 - cocoop_training - INFO - FAISS available for efficient hard pair mining
+2025-05-20 11:35:13,527 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-20 11:40:43,441 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-20 11:40:43,445 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-20 11:40:43,445 - cocoop_training - INFO - Starting training...
+2025-05-20 11:40:43,453 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-20 11:47:43,696 - cocoop_training - WARNING - Contrastive loss is not a scalar (shape: torch.Size([4, 102])). Using mean for logging.
+2025-05-20 11:47:44,095 - cocoop_training - ERROR - Error during training: element 0 of tensors does not require grad and does not have a grad_fn
+2025-05-20 11:47:45,584 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-20 11:47:45,586 - cocoop_training - ERROR - Error in main execution: element 0 of tensors does not require grad and does not have a grad_fn
+2025-05-20 11:47:45,586 - cocoop_training - INFO - Finishing wandb run...
+2025-05-20 12:08:35,946 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:08:37,690 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:08:37,886 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:08:38,920 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:08:39,186 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 12:08:39,227 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 12:08:39,228 - cocoop_training - INFO - Using cuda device
+2025-05-20 12:08:39,228 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:08:40,344 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:08:40,531 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 12:08:40,546 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 12:08:40,546 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-20 12:12:16,260 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-20 12:12:16,260 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-20 12:12:16,260 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-20 12:12:16,261 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-20 12:12:16,261 - cocoop_training - INFO - Starting training...
+2025-05-20 12:12:16,261 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-20 12:12:16,261 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-20 12:12:16,265 - cocoop_training - INFO - Creating models...
+2025-05-20 12:12:16,283 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:12:18,576 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:12:18,923 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:12:22,005 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:12:22,308 - cocoop_training - INFO - Loading datasets...
+2025-05-20 12:12:22,308 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 12:12:22,335 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 12:12:22,340 - cocoop_training - INFO - Creating dataloaders...
+2025-05-20 12:12:22,341 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-20 12:12:22,341 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-20 12:12:22,343 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-20 12:12:22,346 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-05-20 12:12:22,382 - faiss.loader - INFO - Successfully loaded faiss with AVX2 support.
+2025-05-20 12:12:22,388 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes. This is only an error if you're trying to use GPU Faiss.
+2025-05-20 12:12:22,388 - cocoop_training - INFO - FAISS available for efficient hard pair mining
+2025-05-20 12:12:22,389 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-20 12:13:52,973 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-20 12:13:52,973 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-20 12:13:52,974 - cocoop_training - INFO - Starting training...
+2025-05-20 12:13:52,975 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-20 12:21:36,593 - cocoop_training - INFO - Computed embeddings - Images: torch.Size([510, 512]), Text: torch.Size([510, 512])
+2025-05-20 12:22:38,334 - cocoop_training - WARNING - Contrastive loss is not a scalar (shape: torch.Size([4, 102])). Using mean for logging.
+2025-05-20 12:22:38,744 - cocoop_training - ERROR - Error during training: grad can be implicitly created only for scalar outputs
+2025-05-20 12:22:39,607 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-20 12:22:39,608 - cocoop_training - ERROR - Error in main execution: grad can be implicitly created only for scalar outputs
+2025-05-20 12:22:39,608 - cocoop_training - INFO - Finishing wandb run...
+2025-05-20 12:41:12,030 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:41:13,512 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:41:13,925 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:41:15,990 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:41:16,304 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 12:41:16,345 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 12:41:16,345 - cocoop_training - INFO - Using cuda device
+2025-05-20 12:41:16,346 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:41:17,395 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:41:17,585 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 12:41:17,599 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 12:41:17,600 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-20 12:44:54,117 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-20 12:44:54,118 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-20 12:44:54,118 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-20 12:44:54,118 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-20 12:44:54,118 - cocoop_training - INFO - Starting training...
+2025-05-20 12:44:54,118 - cocoop_training - INFO - ==== Starting CoCoOp Training with HELIP ====
+2025-05-20 12:44:54,118 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}}
+2025-05-20 12:44:54,120 - cocoop_training - INFO - Creating models...
+2025-05-20 12:44:54,120 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:44:56,206 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:44:56,470 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 12:44:58,501 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 12:44:58,841 - cocoop_training - INFO - Loading datasets...
+2025-05-20 12:44:58,842 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 12:44:58,879 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 12:44:58,886 - cocoop_training - INFO - Creating dataloaders...
+2025-05-20 12:44:58,886 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-20 12:44:58,887 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-20 12:44:58,888 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-20 12:44:58,889 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-20 12:48:06,883 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-20 12:48:06,884 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-20 12:48:06,884 - cocoop_training - INFO - Starting training...
+2025-05-20 12:48:06,886 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-20 13:00:35,271 - cocoop_training - INFO - Computed embeddings - Images: torch.Size([510, 512]), Text: torch.Size([510, 512])
+2025-05-20 13:01:40,265 - cocoop_training - INFO - Converting contrastive loss of shape torch.Size([4, 102]) to scalar for backprop
+2025-05-20 16:48:29,819 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 16:48:31,895 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 16:48:32,305 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 16:48:35,231 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 16:48:35,419 - cocoop_training - INFO - Initialized PromptSRC ensemble with window_size=5, sigma=2.0
+2025-05-20 16:48:35,504 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 16:48:35,541 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 16:48:35,542 - cocoop_training - INFO - Using cuda device
+2025-05-20 16:48:35,542 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 16:48:36,495 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 16:48:36,672 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 16:48:36,686 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 16:48:36,687 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-20 16:51:16,504 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-20 16:51:16,504 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-20 16:51:16,504 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-20 16:51:16,504 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-20 16:51:16,504 - cocoop_training - INFO - Starting training...
+2025-05-20 16:51:16,504 - cocoop_training - INFO - ==== Starting CoCoOp Training with PromptSRC and HELIP ====
+2025-05-20 16:51:16,505 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.25, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}, 'promptsrc': {'enabled': True, 'mutual_agreement': {'lambda_ma': 0.5, 'temperature': 0.07, 'schedule': True}, 'prompt_ensemble': {'enabled': True, 'window_size': 5, 'sigma': 2.0}, 'textual_diversity': {'lambda_td': 0.3, 'temperature': 0.07, 'schedule': True}}}
+2025-05-20 16:51:16,506 - cocoop_training - INFO - Creating models...
+2025-05-20 16:51:16,507 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 16:51:17,837 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 16:51:18,098 - cocoop_training - INFO - Base model loaded for PromptSRC mutual agreement
+2025-05-20 16:51:18,099 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-20 16:51:19,763 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-20 16:51:20,028 - cocoop_training - INFO - Initialized PromptSRC ensemble with window_size=5, sigma=2.0
+2025-05-20 16:51:20,063 - cocoop_training - INFO - Loading datasets...
+2025-05-20 16:51:20,063 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-20 16:51:20,094 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-20 16:51:20,099 - cocoop_training - INFO - Creating dataloaders...
+2025-05-20 16:51:20,100 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-20 16:51:20,100 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-20 16:51:20,101 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-20 16:51:20,102 - cocoop_training - INFO - PromptSRC is enabled for training
+2025-05-20 16:51:20,102 - cocoop_training - INFO - PromptSRC parameters: lambda_ma=0.5, lambda_td=0.3, temperature=0.07
+2025-05-20 16:51:20,102 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-20 16:54:10,588 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-20 16:54:10,589 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-20 16:54:10,589 - cocoop_training - INFO - Starting training...
+2025-05-20 16:54:10,590 - cocoop_training - INFO - PromptSRC scheduled weights: lambda_ma=0.5000, lambda_td=0.3000
+2025-05-20 16:54:10,590 - cocoop_training - INFO - Computing embeddings for hard pair mining
+2025-05-20 17:06:29,401 - cocoop_training - INFO - Computed embeddings - Images: torch.Size([510, 512]), Text: torch.Size([510, 512])
+2025-05-20 17:07:35,577 - cocoop_training - INFO - Converting contrastive loss of shape torch.Size([4, 102]) to scalar for backprop
+2025-05-20 17:07:35,945 - cocoop_training - ERROR - Error during training: 'CLIP' object has no attribute 'dtype'
+2025-05-20 17:07:36,854 - cocoop_training - INFO - Saved checkpoint at ./checkpoints/checkpoint_epoch_1.pth
+2025-05-20 17:07:36,855 - cocoop_training - ERROR - Error in main execution: 'CLIP' object has no attribute 'dtype'
+2025-05-20 17:07:36,855 - cocoop_training - INFO - Finishing wandb run...
+2025-05-21 08:31:28,239 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-21 08:31:32,053 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-21 08:31:33,228 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-21 08:31:35,763 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-21 08:31:36,069 - cocoop_training - INFO - Initialized PromptSRC ensemble with window_size=5, sigma=2.0
+2025-05-21 08:31:36,287 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-21 08:31:36,374 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-21 08:31:36,375 - cocoop_training - INFO - Using cuda device
+2025-05-21 08:31:36,376 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-21 08:31:38,550 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-21 08:31:38,854 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-21 08:31:38,890 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-21 08:31:38,891 - cocoop_training - INFO - Running initial zero-shot evaluation...
+2025-05-21 08:34:10,118 - cocoop_training - INFO - ==== Zero-shot Evaluation Results ====
+2025-05-21 08:34:10,118 - cocoop_training - INFO - 🔍 Base classes accuracy: 74.69%
+2025-05-21 08:34:10,119 - cocoop_training - INFO - 🔍 Novel classes accuracy: 77.04%
+2025-05-21 08:34:10,119 - cocoop_training - INFO - 🔍 Harmonic Mean: 75.85%
+2025-05-21 08:34:10,120 - cocoop_training - INFO - Starting training...
+2025-05-21 08:34:10,120 - cocoop_training - INFO - ==== Starting CoCoOp Training with PromptSRC and HELIP ====
+2025-05-21 08:34:10,121 - cocoop_training - INFO - Config: {'base_model': {'name': 'ViT-B-32', 'weights': 'laion2b_s34b_b79k'}, 'trainer': {'batch_size': 4, 'epochs': 3, 'lr': 0.002, 'weight_decay': 0.05, 'warmup_epochs': 1, 'patience': 5, 'checkpoint_dir': './checkpoints', 'cocoop': {'n_ctx': 8, 'ctx_init': '', 'prec': 'fp16'}}, 'input': {'size': [224, 224]}, 'data': {'data_dir': './data', 'num_workers': 0, 'pin_memory': False}, 'helip': {'enabled': True, 'k': 5, 'p': 20, 'alpha': 0.05, 'lambda_hnml': 0.5, 'mining_freq': 5, 'cache_embeddings': True}, 'promptsrc': {'enabled': True, 'mutual_agreement': {'lambda_ma': 0.5, 'temperature': 0.07, 'schedule': True}, 'prompt_ensemble': {'enabled': True, 'window_size': 5, 'sigma': 2.0}, 'textual_diversity': {'lambda_td': 0.3, 'temperature': 0.07, 'schedule': True}}}
+2025-05-21 08:34:10,124 - cocoop_training - INFO - Creating models...
+2025-05-21 08:34:10,124 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-21 08:34:11,538 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-21 08:34:11,870 - cocoop_training - INFO - Base model loaded for PromptSRC mutual agreement
+2025-05-21 08:34:11,871 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-21 08:34:13,458 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-21 08:34:13,710 - cocoop_training - INFO - Initialized PromptSRC ensemble with window_size=5, sigma=2.0
+2025-05-21 08:34:13,736 - cocoop_training - INFO - Loading datasets...
+2025-05-21 08:34:13,736 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-21 08:34:13,758 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-21 08:34:13,762 - cocoop_training - INFO - Creating dataloaders...
+2025-05-21 08:34:13,763 - cocoop_training - INFO - Created dataloaders with batch size 4
+2025-05-21 08:34:13,763 - cocoop_training - INFO - Setting up optimizer and scheduler...
+2025-05-21 08:34:13,764 - cocoop_training - INFO - HELIP is enabled for training
+2025-05-21 08:34:13,765 - cocoop_training - INFO - PromptSRC is enabled for training
+2025-05-21 08:34:13,765 - cocoop_training - INFO - PromptSRC parameters: lambda_ma=0.5, lambda_td=0.3, temperature=0.07
+2025-05-21 08:34:13,765 - cocoop_training - INFO - Evaluating zero-shot performance of base model...
+2025-05-21 08:37:43,321 - cocoop_training - INFO - Epoch 0 - Base Accuracy: 0.7469, Novel Accuracy: 0.7704, Harmonic Mean: 0.7585
+2025-05-21 08:37:43,322 - cocoop_training - INFO - Zero-shot: Base Acc=0.7469, Novel Acc=0.7704, HM=0.7585
+2025-05-21 08:37:43,322 - cocoop_training - INFO - Starting training...
+2025-05-21 08:37:43,323 - cocoop_training - INFO - PromptSRC scheduled weights: lambda_ma=0.5000, lambda_td=0.3000
+2025-05-21 08:37:43,323 - cocoop_training - INFO - Computing embeddings for hard pair mining
