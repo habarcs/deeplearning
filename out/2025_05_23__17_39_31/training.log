@@ -1,0 +1,14 @@
+2025-05-23 17:39:35,847 - cocoop_training - INFO - Using cuda device
+2025-05-23 17:39:35,848 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-23 17:39:37,882 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-23 17:39:38,122 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-23 17:39:39,286 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-23 17:39:39,472 - cocoop_training - INFO - Initialized PromptSRC ensemble with window_size=5, sigma=2.0
+2025-05-23 17:39:39,557 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-23 17:39:39,582 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-23 17:39:39,583 - cocoop_training - INFO - Using cuda device
+2025-05-23 17:39:39,583 - root - INFO - Loaded ViT-B-32 model config.
+2025-05-23 17:39:40,471 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
+2025-05-23 17:39:40,652 - cocoop_training - INFO - Loading Flowers102 dataset from ./data
+2025-05-23 17:39:40,666 - cocoop_training - INFO - Dataset loaded: 1020 train, 1020 val, 6149 test
+2025-05-23 17:39:40,667 - cocoop_training - INFO - Running initial zero-shot evaluation...
