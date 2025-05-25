@@ -20,7 +20,10 @@ CFG = {
         },
         "prompt_learner": {
             "n_ctx": 8,
-            "ctx_init": "",
+            "ctx_init": "", 
+            "class_token_position": "end",  # "beg" for beginning, "mid" for middle, "end" for end
+            "tokenizer": "tokenizer"
+    
         },
         "text_encoder": {},
     },
@@ -397,107 +400,111 @@ class TextEncoder(torch.nn.Module):
         return x
 
 
+
 class PromptLearner(torch.nn.Module):
-    def __init__(self, cfg, classnames, clip_model, tokenizer):
+    def __init__(self, clip_model, classnames, n_ctx, ctx_init, class_token_position, tokenizer, csc=False):
         super().__init__()
         n_cls = len(classnames)
-        n_ctx = cfg["n_ctx"]
-        ctx_init = cfg["ctx_init"]
         ctx_dim = clip_model.ln_final.weight.shape[0]
-        vis_dim = clip_model.visual.output_dim
 
+        # Use given words to initialize context vectors
         if ctx_init:
-            # use given words to initialize context vectors
             ctx_init = ctx_init.replace("_", " ")
             n_ctx = len(ctx_init.split(" "))
-            prompt = tokenizer(ctx_init).to(DEVICE)
+            prompt = tokenizer(ctx_init).to(clip_model.token_embedding.weight.device)
             with torch.no_grad():
                 embedding = clip_model.token_embedding(prompt)
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
-            # random initialization
-            ctx_vectors = torch.empty(n_ctx, ctx_dim)
-            ctx_vectors = torch.empty(n_ctx, ctx_dim, device=DEVICE)
+            if csc:
+                print("Initializing class-specific contexts")
+                ctx_vectors = torch.empty(n_cls, n_ctx, ctx_dim)
+            else:
+                print("Initializing a generic context")
+                ctx_vectors = torch.empty(n_ctx, ctx_dim)
+
             torch.nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
 
+        print(f"Initial context: '{prompt_prefix}'")
+        print(f"Number of context words (tokens): {n_ctx}")
+
         self.ctx = torch.nn.Parameter(ctx_vectors)
 
-        self.meta_net = torch.nn.Sequential(
-            OrderedDict(
-                [
-                    ("linear1", torch.nn.Linear(vis_dim, vis_dim // 16)),
-                    ("relu", torch.nn.ReLU(inplace=True)),
-                    ("linear2", torch.nn.Linear(vis_dim // 16, ctx_dim)),
-                ]
-            )
-        ).to(DEVICE)
-
         classnames = [name.replace("_", " ") for name in classnames]
-        name_lens = [len(clip_model.encode_text(tokenizer(name).to(DEVICE))) for name in classnames]
+        self.name_lens = [len(tokenizer(name)[0]) - 2 for name in classnames]  # exclude SOS and EOS
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
 
-        tokenized_prompts = torch.cat([tokenizer(p) for p in prompts]).to(DEVICE)  # (n_cls, n_tkn)
+        tokenized_prompts = torch.cat([tokenizer(p) for p in prompts]).to(clip_model.token_embedding.weight.device)
+
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts)
 
-        # These token vectors will be saved when in save_model(),
-        # but they should be ignored in load_model() as we want to use
-        # those computed using the current class names
         self.register_buffer("token_prefix", embedding[:, :1, :])  # SOS
         self.register_buffer("token_suffix", embedding[:, 1 + n_ctx :, :])  # CLS, EOS
 
         self.n_cls = n_cls
         self.n_ctx = n_ctx
-        self.tokenized_prompts = tokenized_prompts  # torch.Tensor
-        self.name_lens = name_lens
+        self.tokenized_prompts = tokenized_prompts
+        self.class_token_position = class_token_position
 
-    def construct_prompts(self, ctx, prefix, suffix, label=None):
-        # dim0 is either batch_size (during training) or n_cls (during testing)
-        # ctx: context tokens, with shape of (dim0, n_ctx, ctx_dim)
-        # prefix: the sos token, with shape of (n_cls, 1, ctx_dim)
-        # suffix: remaining tokens, with shape of (n_cls, *, ctx_dim)
-
-        if label is not None:
-            prefix = prefix[label]
-            suffix = suffix[label]
-
-        prompts = torch.cat(
-            [
-                prefix,  # (dim0, 1, dim)
-                ctx,  # (dim0, n_ctx, dim)
-                suffix,  # (dim0, *, dim)
-            ],
-            dim=1,
-        )
-
-        return prompts
-
-    def forward(self, im_features):
+    def forward(self):
         prefix = self.token_prefix
         suffix = self.token_suffix
-        ctx = self.ctx  # (n_ctx, ctx_dim)
-        bias = self.meta_net(im_features)  # (batch, ctx_dim)
-        bias = bias.unsqueeze(1)  # (batch, 1, ctx_dim)
-        ctx = ctx.unsqueeze(0)  # (1, n_ctx, ctx_dim)
-        ctx_shifted = ctx + bias  # (batch, n_ctx, ctx_dim)
+        ctx = self.ctx
 
-        # Use instance-conditioned context tokens for all classes
-        prompts = []
-        for ctx_shifted_i in ctx_shifted:
-            ctx_i = ctx_shifted_i.unsqueeze(0).expand(self.n_cls, -1, -1)
-            pts_i = self.construct_prompts(ctx_i, prefix, suffix)  # (n_cls, n_tkn, ctx_dim)
-            prompts.append(pts_i)
-        prompts = torch.stack(prompts)
+        if ctx.dim() == 2:
+            ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1)
+
+        if self.class_token_position == "end":
+            prompts = torch.cat([prefix, ctx, suffix], dim=1)
+
+        elif self.class_token_position == "middle":
+            half_n_ctx = self.n_ctx // 2
+            prompts = []
+            for i in range(self.n_cls):
+                name_len = self.name_lens[i]
+                prefix_i = prefix[i : i + 1, :, :]
+                class_i = suffix[i : i + 1, :name_len, :]
+                suffix_i = suffix[i : i + 1, name_len:, :]
+                ctx_i_half1 = ctx[i : i + 1, :half_n_ctx, :]
+                ctx_i_half2 = ctx[i : i + 1, half_n_ctx:, :]
+                prompt = torch.cat([prefix_i, ctx_i_half1, class_i, ctx_i_half2, suffix_i], dim=1)
+                prompts.append(prompt)
+            prompts = torch.cat(prompts, dim=0)
+
+        elif self.class_token_position == "front":
+            prompts = []
+            for i in range(self.n_cls):
+                name_len = self.name_lens[i]
+                prefix_i = prefix[i : i + 1, :, :]
+                class_i = suffix[i : i + 1, :name_len, :]
+                suffix_i = suffix[i : i + 1, name_len:, :]
+                ctx_i = ctx[i : i + 1, :, :]
+                prompt = torch.cat([prefix_i, class_i, ctx_i, suffix_i], dim=1)
+                prompts.append(prompt)
+            prompts = torch.cat(prompts, dim=0)
+
+        else:
+            raise ValueError(f"Invalid class_token_position: {self.class_token_position}")
 
         return prompts
+
 
 
 class CustomCLIP(torch.nn.Module):
     def __init__(self, cfg, classnames, clip_model, tokenizer):
         super().__init__()
-        self.prompt_learner = PromptLearner(cfg["prompt_learner"], classnames, clip_model, tokenizer)
+        self.prompt_learner = PromptLearner(
+                                clip_model=clip_model,
+                                classnames=classnames,
+                                n_ctx=cfg["prompt_learner"]["n_ctx"],
+                                ctx_init=cfg["prompt_learner"]["ctx_init"],
+                               class_token_position=cfg["prompt_learner"]["class_token_position"],
+                                tokenizer=tokenizer
+                            ) 
+
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(cfg["text_encoder"], clip_model)
@@ -689,7 +696,6 @@ def main():
             best_acc=best_acc,
             is_best=is_best,
         )
-
         # Early stopping
         if patience_counter >= CFG["training"]["patience"]:
             LOGGER.info(f"Early stopping triggered after {patience_counter} epochs without improvement")
