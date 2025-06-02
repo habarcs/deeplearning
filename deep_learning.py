@@ -1,9 +1,15 @@
-# !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10 scipy==1.15.3
+# !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10 scipy==1.15.3 segmentation-models-pytorch==0.5.0
 import os
 from collections import OrderedDict
+from pathlib import Path
+import re
+from typing import Any, Callable, Optional, Tuple, Union
 import torch
 import torchvision
 import open_clip
+from torchvision.datasets import Flowers102
+from torchvision.datasets.utils import download_and_extract_archive
+from torchvision.transforms.functional import pil_to_tensor
 from tqdm import tqdm
 import wandb
 import torch.nn.functional as F
@@ -11,6 +17,8 @@ from torch.utils.data import DataLoader
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 import logging
 from datetime import datetime
+import PIL.Image
+import segmentation_models_pytorch as smp
 
 CFG = {
     "COCOOP": {
@@ -24,7 +32,19 @@ CFG = {
         },
         "text_encoder": {},
     },
-    "wandb": True,
+    "bg-masking": {
+        "enabled": True,
+        # available options: https://smp.readthedocs.io/en/latest/encoders.html
+        "backbone": "unet",
+        "encoder": {
+            "name": "mobilenet_v2",
+            "weights": "imagenet",
+        },
+        "training": {
+            "epochs": 10,
+        },
+    },
+    "wandb": False,
     "training": {
         "resume_id": None,
         "resume_from": "best",
@@ -72,6 +92,58 @@ WANDB = (
 
 DEVICE = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
 LOGGER.info(f"Using {DEVICE} device")
+
+
+class Flowers102WithSeqmentation(Flowers102):
+    """
+    Flowers102 dataset with seqmentation
+    if segmentation_training is enabled, __getitem__ will return the segmentation mask instead of the label
+    can be disabled after initialization
+    """
+
+    def __init__(
+        self,
+        root: Union[str, Path],
+        split: str = "train",
+        transform: Optional[Callable] = None,
+        target_transform: Optional[Callable] = None,
+        download: bool = False,
+        segmentation_training: bool = False,
+    ) -> None:
+        self.segmentation_training = segmentation_training
+        self._file_dict["seg"] = ("102segmentations.tgz", "51375996b6c4f367a4b9f4492d7ecef5")
+        super().__init__(root, split, transform, target_transform, download)
+        self._seg_folder = self._base_folder / "segmim"
+        self._image_segs = []
+        for image_file in self._image_files:
+            self._image_segs.append(self._seg_folder / re.sub(r"image_", "segmim_", image_file.name))
+
+    def get_bg_mask(self, idx: int) -> Any:
+        seg_file = self._image_segs[idx]
+        seg_image = PIL.Image.open(seg_file).convert("RGB")
+        seg = pil_to_tensor(seg_image)
+        # inverting the bg mask, to get 0 for background
+        mask = ~((seg[0] == 0) & (seg[1] == 0) & (seg[2] == 254))  # 0 0 254 blue represents the bg in the segmentation
+        mask = mask.int()
+        if self.transform:
+            mask = self.transform(mask)
+        return mask
+
+    def __getitem__(self, idx: int) -> Tuple[Any, Any]:
+        image, label = super().__getitem__(idx)
+        if self.segmentation_training:
+            mask = self.get_bg_mask(idx)
+            return image, mask
+        return image, label
+
+    def download(self):
+        super().download()
+        download_and_extract_archive(
+            f"{self._download_url_prefix}{self._file_dict['seg'][0]}",
+            str(self._base_folder),
+            md5=self._file_dict["seg"][1],
+        )
+
 
 CLASS_NAMES = [
     "pink primrose",
@@ -179,12 +251,28 @@ CLASS_NAMES = [
 ]
 
 
-def get_data(data_dir="./data", train_transform=None, test_transform=None):
-    LOGGER.info(f"Loading Flowers102 dataset from {data_dir}")
+def get_data(data_dir="./data", train_transform=None, test_transform=None, segmentation_training=False):
+    LOGGER.info(
+        f"Loading Flowers102 dataset from {data_dir} {'for segmentation training' if segmentation_training else ''}"
+    )
 
-    train = torchvision.datasets.Flowers102(root=data_dir, split="train", download=True, transform=train_transform)
-    val = torchvision.datasets.Flowers102(root=data_dir, split="val", download=True, transform=test_transform)
-    test = torchvision.datasets.Flowers102(root=data_dir, split="test", download=True, transform=test_transform)
+    train = Flowers102WithSeqmentation(
+        root=data_dir,
+        split="train",
+        download=True,
+        transform=train_transform,
+        segmentation_training=segmentation_training,
+    )
+    val = Flowers102WithSeqmentation(
+        root=data_dir, split="val", download=True, transform=test_transform, segmentation_training=segmentation_training
+    )
+    test = Flowers102WithSeqmentation(
+        root=data_dir,
+        split="test",
+        download=True,
+        transform=test_transform,
+        segmentation_training=segmentation_training,
+    )
 
     LOGGER.info(f"Dataset loaded: {len(train)} train, {len(val)} val, {len(test)} test")
     return train, val, test
@@ -495,15 +583,20 @@ class PromptLearner(torch.nn.Module):
 
 
 class CustomCLIP(torch.nn.Module):
-    def __init__(self, cfg, classnames, clip_model, tokenizer):
+    def __init__(self, cfg, classnames, clip_model, tokenizer, segmentation_model):
         super().__init__()
         self.prompt_learner = PromptLearner(cfg["prompt_learner"], classnames, clip_model, tokenizer)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(cfg["text_encoder"], clip_model)
         self.logit_scale = clip_model.logit_scale
+        self.segmentation_model = segmentation_model
 
     def forward(self, image, label=None):
+        if self.segmentation_model:
+            mask = self.segmentation_model(image)
+            image = mask * image
+
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
@@ -540,9 +633,23 @@ def create_base_model(cfg):
     return model, preprocess, tokenizer
 
 
-def create_custom_model(cfg):
+def create_segmentation_model(cfg):
+    model = smp.create_model(
+        arch=cfg["backbone"],
+        encoder_name=cfg["encoder"]["name"],
+        classes=1,
+        activation="sigmoid",
+        encoder_weights=cfg["encoder"]["weights"],
+    )
+    preprocess = smp.encoders.get_preprocessing_fn(
+        encoder_name=cfg["encoder"]["name"], pretrained=cfg["encoder"]["weights"]
+    )
+    return model, preprocess
+
+
+def create_custom_model(cfg, segmentation_model=None):
     base_model, preprocess, tokenizer = create_base_model(cfg["base_model"])
-    model = CustomCLIP(cfg, CLASS_NAMES, base_model, tokenizer)
+    model = CustomCLIP(cfg, CLASS_NAMES, base_model, tokenizer, segmentation_model)
     return model, preprocess, tokenizer
 
 
@@ -558,6 +665,54 @@ def get_scheduler(optimizer, cfg):
         )
 
     return scheduler
+
+
+def fine_tune_segmenter(cfg, data_loader, val_data_loader, segmentation_model):
+    LOGGER.info("Fine tuning segmenter!")
+    epochs = cfg["training"]["epochs"]
+    loss_fn = smp.losses.JaccardLoss(
+        mode=smp.losses.constants.BINARY_MODE,
+    )
+    optimizer = torch.optim.Adam(segmentation_model.params())
+    segmentation_model.train()
+    for epoch in range(epochs):
+        progress_bar = tqdm(data_loader, desc=f"Seg, train Epoch {epoch}")
+        total_loss = 0
+        for batch, (img, mask) in enumerate(progress_bar):
+            optimizer.zero_grad()
+            output = segmentation_model(img)
+            loss = loss_fn(output, mask)
+            loss.backward()
+            optimizer.step()
+
+            progress_bar.set_postfix(
+                {
+                    "seg_loss": f"{loss.item():.4f}",
+                    "seg_avg_loss": f"{total_loss / (batch + 1):.4f}",
+                }
+            )
+
+            WANDB.log(
+                {
+                    "seg_train_loss": loss.item(),
+                    "seg_train_avg_loss": total_loss / (batch + 1),
+                }
+            )
+        avg_loss = total_loss / len(data_loader)
+        LOGGER.info(f"Seg epoch {epoch} - Seg training Loss: {avg_loss:.4f}")
+
+    LOGGER.info("Finished finetuning segmentation model, freezing all params")
+    for p in segmentation_model.params():
+        p.requires_grad = False
+
+    LOGGER.info("Testing segmentation model")
+    segmentation_model.eval()
+    test_loss = 0
+    for img, mask in val_data_loader:
+        pred = segmentation_model(img)
+        test_loss += loss_fn(pred, mask).item()
+    test_loss /= len(val_data_loader)
+    LOGGER.info(f"Segmentation model avarage test loss: {test_loss:.4f}")
 
 
 def train_loop(dataloader, model, avg_model, optimizer, epoch, scheduler=None):
@@ -605,7 +760,16 @@ def train_loop(dataloader, model, avg_model, optimizer, epoch, scheduler=None):
 
 
 def main():
-    custom_model, custom_preprocess, custom_tokenizer = create_custom_model(CFG["COCOOP"])
+    if CFG["bg-masking"]["enabled"]:
+        segmentation_model, preprocess = create_segmentation_model(CFG["bg-masking"])
+        train_set, val_set, test_set = get_data(train_transform=preprocess, test_transform=preprocess, segmentation_training=True)
+        base_classes, novel_classes = base_novel_categories(train_set)
+        train_base, _ = split_data(train_set, base_classes)
+        val_base, _ = split_data(val_set, base_classes)
+        fine_tune_segmenter(CFG["bg-masking"], train_base, val_base, segmentation_model)
+    else:
+        segmentation_model = None
+    custom_model, custom_preprocess, custom_tokenizer = create_custom_model(CFG["COCOOP"], segmentation_model)
     avg_model = (
         AveragedModel(custom_model, multi_avg_fn=get_ema_multi_avg_fn(CFG["validation"]["ema"]["decay"]))
         if CFG["validation"]["ema"]["enabled"]
