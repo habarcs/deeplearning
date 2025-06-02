@@ -40,9 +40,7 @@ CFG = {
             "name": "mobilenet_v2",
             "weights": "imagenet",
         },
-        "training": {
-            "epochs": 10,
-        },
+        "training": {"epochs": 1, "batch_size": 8, "image_size": 224},
     },
     "wandb": False,
     "training": {
@@ -107,11 +105,13 @@ class Flowers102WithSeqmentation(Flowers102):
         split: str = "train",
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None,
+        mask_transform: Optional[Callable] = None,
         download: bool = False,
         segmentation_training: bool = False,
     ) -> None:
         self.segmentation_training = segmentation_training
         self._file_dict["seg"] = ("102segmentations.tgz", "51375996b6c4f367a4b9f4492d7ecef5")
+        self.mask_transform = mask_transform
         super().__init__(root, split, transform, target_transform, download)
         self._seg_folder = self._base_folder / "segmim"
         self._image_segs = []
@@ -125,8 +125,8 @@ class Flowers102WithSeqmentation(Flowers102):
         # inverting the bg mask, to get 0 for background
         mask = ~((seg[0] == 0) & (seg[1] == 0) & (seg[2] == 254))  # 0 0 254 blue represents the bg in the segmentation
         mask = mask.int()
-        if self.transform:
-            mask = self.transform(mask)
+        if self.mask_transform:
+            mask = self.mask_transform(mask)
         return mask
 
     def __getitem__(self, idx: int) -> Tuple[Any, Any]:
@@ -251,7 +251,9 @@ CLASS_NAMES = [
 ]
 
 
-def get_data(data_dir="./data", train_transform=None, test_transform=None, segmentation_training=False):
+def get_data(
+    data_dir="./data", train_transform=None, test_transform=None, mask_transform=None, segmentation_training=False
+):
     LOGGER.info(
         f"Loading Flowers102 dataset from {data_dir} {'for segmentation training' if segmentation_training else ''}"
     )
@@ -261,16 +263,23 @@ def get_data(data_dir="./data", train_transform=None, test_transform=None, segme
         split="train",
         download=True,
         transform=train_transform,
+        mask_transform=mask_transform,
         segmentation_training=segmentation_training,
     )
     val = Flowers102WithSeqmentation(
-        root=data_dir, split="val", download=True, transform=test_transform, segmentation_training=segmentation_training
+        root=data_dir,
+        split="val",
+        download=True,
+        transform=test_transform,
+        mask_transform=mask_transform,
+        segmentation_training=segmentation_training,
     )
     test = Flowers102WithSeqmentation(
         root=data_dir,
         split="test",
         download=True,
         transform=test_transform,
+        mask_transform=mask_transform,
         segmentation_training=segmentation_training,
     )
 
@@ -583,7 +592,7 @@ class PromptLearner(torch.nn.Module):
 
 
 class CustomCLIP(torch.nn.Module):
-    def __init__(self, cfg, classnames, clip_model, tokenizer, segmentation_model):
+    def __init__(self, cfg, classnames, clip_model, tokenizer, segmentation_model, segmentation_transform):
         super().__init__()
         self.prompt_learner = PromptLearner(cfg["prompt_learner"], classnames, clip_model, tokenizer)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
@@ -591,11 +600,15 @@ class CustomCLIP(torch.nn.Module):
         self.text_encoder = TextEncoder(cfg["text_encoder"], clip_model)
         self.logit_scale = clip_model.logit_scale
         self.segmentation_model = segmentation_model
+        self.segmentation_tranforms = segmentation_transform
 
     def forward(self, image, label=None):
         if self.segmentation_model:
-            mask = self.segmentation_model(image)
-            image = mask * image
+            seg_input = self.segmentation_tranforms(image) if self.segmentation_tranforms else image
+            mask = self.segmentation_model(seg_input)
+            binary_mask = (mask > 0.5).int()
+            import pdb; pdb.set_trace()
+            image = binary_mask * image
 
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
@@ -640,16 +653,18 @@ def create_segmentation_model(cfg):
         classes=1,
         activation="sigmoid",
         encoder_weights=cfg["encoder"]["weights"],
-    )
-    preprocess = smp.encoders.get_preprocessing_fn(
+    ).to(DEVICE)
+    params = smp.encoders.get_preprocessing_params(
         encoder_name=cfg["encoder"]["name"], pretrained=cfg["encoder"]["weights"]
     )
-    return model, preprocess
+    normalizer_transform = torchvision.transforms.Normalize(params["mean"], params["std"])
+    size_transform = torchvision.transforms.CenterCrop(cfg["training"]["image_size"])
+    return model, normalizer_transform, size_transform
 
 
-def create_custom_model(cfg, segmentation_model=None):
+def create_custom_model(cfg, segmentation_model=None, segmentation_transform=None):
     base_model, preprocess, tokenizer = create_base_model(cfg["base_model"])
-    model = CustomCLIP(cfg, CLASS_NAMES, base_model, tokenizer, segmentation_model)
+    model = CustomCLIP(cfg, CLASS_NAMES, base_model, tokenizer, segmentation_model, segmentation_transform)
     return model, preprocess, tokenizer
 
 
@@ -670,20 +685,21 @@ def get_scheduler(optimizer, cfg):
 def fine_tune_segmenter(cfg, data_loader, val_data_loader, segmentation_model):
     LOGGER.info("Fine tuning segmenter!")
     epochs = cfg["training"]["epochs"]
-    loss_fn = smp.losses.JaccardLoss(
-        mode=smp.losses.constants.BINARY_MODE,
-    )
-    optimizer = torch.optim.Adam(segmentation_model.params())
+    loss_fn = smp.losses.DiceLoss(mode=smp.losses.constants.BINARY_MODE)
+    optimizer = torch.optim.Adam(segmentation_model.parameters())
     segmentation_model.train()
     for epoch in range(epochs):
-        progress_bar = tqdm(data_loader, desc=f"Seg, train Epoch {epoch}")
+        progress_bar = tqdm(data_loader, desc=f"Segmentation train Epoch {epoch}")
         total_loss = 0
         for batch, (img, mask) in enumerate(progress_bar):
             optimizer.zero_grad()
+            img = img.to(DEVICE)
+            mask = mask.to(DEVICE)
             output = segmentation_model(img)
             loss = loss_fn(output, mask)
             loss.backward()
             optimizer.step()
+            total_loss += loss.item()
 
             progress_bar.set_postfix(
                 {
@@ -699,20 +715,44 @@ def fine_tune_segmenter(cfg, data_loader, val_data_loader, segmentation_model):
                 }
             )
         avg_loss = total_loss / len(data_loader)
-        LOGGER.info(f"Seg epoch {epoch} - Seg training Loss: {avg_loss:.4f}")
+        LOGGER.info(f"Segmentation epoch {epoch} - Segmentation training Loss: {avg_loss:.4f}")
 
-    LOGGER.info("Finished finetuning segmentation model, freezing all params")
-    for p in segmentation_model.params():
+    LOGGER.info("Finished finetuning segmentation model, freezing all parameters")
+    for p in segmentation_model.parameters():
         p.requires_grad = False
 
     LOGGER.info("Testing segmentation model")
     segmentation_model.eval()
     test_loss = 0
     for img, mask in val_data_loader:
+        img = img.to(DEVICE)
+        mask = mask.to(DEVICE)
         pred = segmentation_model(img)
         test_loss += loss_fn(pred, mask).item()
     test_loss /= len(val_data_loader)
     LOGGER.info(f"Segmentation model avarage test loss: {test_loss:.4f}")
+
+
+def setup_segmentation_module(cfg):
+    if cfg["enabled"]:
+        segmentation_model, normalizer_transform, size_transform = create_segmentation_model(cfg)
+        segmentation_transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), size_transform, normalizer_transform])
+        seg_train_set, seg_val_set, _ = get_data(
+            train_transform=segmentation_transform,
+            test_transform=segmentation_transform,
+            mask_transform=size_transform,
+            segmentation_training=True,
+        )
+        base_classes, _ = base_novel_categories(seg_train_set)
+        seg_train_base, _ = split_data(seg_train_set, base_classes)
+        seg_val_base, _ = split_data(seg_val_set, base_classes)
+        seg_train_loader = DataLoader(seg_train_base, batch_size=cfg["training"]["batch_size"], shuffle=True)
+        seg_val_loader = DataLoader(seg_val_base, batch_size=cfg["training"]["batch_size"], shuffle=False)
+        fine_tune_segmenter(cfg, seg_train_loader, seg_val_loader, segmentation_model)
+    else:
+        segmentation_model = None
+        normalizer_transform = None
+    return segmentation_model, normalizer_transform
 
 
 def train_loop(dataloader, model, avg_model, optimizer, epoch, scheduler=None):
@@ -760,16 +800,15 @@ def train_loop(dataloader, model, avg_model, optimizer, epoch, scheduler=None):
 
 
 def main():
-    if CFG["bg-masking"]["enabled"]:
-        segmentation_model, preprocess = create_segmentation_model(CFG["bg-masking"])
-        train_set, val_set, test_set = get_data(train_transform=preprocess, test_transform=preprocess, segmentation_training=True)
-        base_classes, novel_classes = base_novel_categories(train_set)
-        train_base, _ = split_data(train_set, base_classes)
-        val_base, _ = split_data(val_set, base_classes)
-        fine_tune_segmenter(CFG["bg-masking"], train_base, val_base, segmentation_model)
-    else:
-        segmentation_model = None
-    custom_model, custom_preprocess, custom_tokenizer = create_custom_model(CFG["COCOOP"], segmentation_model)
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
+
+    segmentation_model, segmentation_transform = setup_segmentation_module(CFG["bg-masking"])
+
+    custom_model, custom_preprocess, custom_tokenizer = create_custom_model(
+        CFG["COCOOP"], segmentation_model, segmentation_transform
+    )
     avg_model = (
         AveragedModel(custom_model, multi_avg_fn=get_ema_multi_avg_fn(CFG["validation"]["ema"]["decay"]))
         if CFG["validation"]["ema"]["enabled"]
@@ -805,10 +844,6 @@ def main():
 
     optimizer = get_optimizer(custom_model, CFG["training"]["optimizer"])
     scheduler = get_scheduler(optimizer, CFG["training"]["scheduler"])
-
-    torch.manual_seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
 
     LOGGER.info("Starting CoCoOp training...")
     if CFG["training"]["resume_id"]:
