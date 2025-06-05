@@ -58,6 +58,7 @@ CFG = {
         "scheduler": {
             "warmup_epochs": 1,
         },
+        "augmentation_mode": "rotate_contrast_illumination",  # choose from: rotate_illumination, rotate_contrast, rotate_contrast_illumination
     },
     "input": {
         "size": [224, 224]  # Input image size
@@ -1189,6 +1190,10 @@ class PromptLearner(torch.nn.Module):
         # Use tokenizer to encode classnames safely
         name_lens = [len(tokenizer(name)) for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
+        
+        # prompt beginning and end tokens
+    
+
 
         # Move tokenized prompts to the correct device
         tokenized_prompts = torch.cat([tokenizer(p) for p in prompts]).to(device)  # (n_cls, n_tkn)
@@ -1402,6 +1407,36 @@ def create_custom_model(device):
     model = CustomCLIP(CFG, CLASS_NAMES, base_model, tokenizer, device)
     return model, preprocess, tokenizer #adding tokenizer in line with "self.prompt_learner" definiton
 
+
+def image_augmentation(mode="rotate_illumination", base_preprocess=None):
+    if mode == "rotate_illumination":
+        return torchvision.transforms.Compose([
+            torchvision.transforms.RandomRotation(degrees=30),
+            torchvision.transforms.Lambda(lambda img: torchvision.transforms.functional.adjust_brightness(img, brightness_factor=np.random.uniform(1.1, 1.5))),
+            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+            torchvision.transforms.RandomHorizontalFlip(),
+            base_preprocess
+        ])
+    elif mode == "rotate_contrast":
+        return torchvision.transforms.Compose([
+            torchvision.transforms.RandomRotation(degrees=30),
+            torchvision.transforms.Lambda(lambda img: torchvision.transforms.functional.adjust_contrast(img, contrast_factor=np.random.uniform(0.8, 2.0))),
+            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+            torchvision.transforms.RandomHorizontalFlip(),
+            base_preprocess
+        ])
+    elif mode == "rotate_contrast_illumination":
+        return torchvision.transforms.Compose([
+            torchvision.transforms.RandomRotation(degrees=30),
+            torchvision.transforms.Lambda(lambda img: torchvision.transforms.functional.adjust_contrast(img, contrast_factor=np.random.uniform(0.8, 2.0))),
+            torchvision.transforms.Lambda(lambda img: torchvision.transforms.functional.adjust_brightness(img, brightness_factor=np.random.uniform(1.1, 1.5))),
+            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+            torchvision.transforms.RandomHorizontalFlip(),
+            base_preprocess
+        ])
+    else:
+        raise ValueError(f"Unknown augmentation mode: {mode}")
+
 """## Initialize model"""
 
 device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
@@ -1415,14 +1450,9 @@ print(base_model)
 
 """
 
-# Create data augmentation for training 
-# TODO: Explore better augmentations, this is just boiler-plate 
-train_transform = torchvision.transforms.Compose([
-    torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
-    torchvision.transforms.RandomHorizontalFlip(),
-    torchvision.transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
-    base_preprocess
-])
+# Data augmentation for training 
+# 
+train_transform = image_augmentation(mode=CFG["training"]["augmentation_mode"], base_preprocess=base_preprocess)
 
 # get the three datasets
 train_set, val_set, test_set = get_data(
@@ -1850,12 +1880,11 @@ def main():
         # Initial zero-shot evaluation with the base model
         base_model, base_preprocess, base_tokenizer = create_base_model(device)
         
-        train_transform = torchvision.transforms.Compose([
-            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
-            torchvision.transforms.RandomHorizontalFlip(),
-            torchvision.transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
-            base_preprocess
-        ])
+        augmentation_mode = CFG.get("augmentation_mode", "rotate_illumination")  # Default fallback
+        train_transform = train_transform(
+            mode=augmentation_mode, 
+            base_preprocess=base_preprocess
+        )
         
         train_set, val_set, test_set = get_data(
             data_dir=CFG["data"]["data_dir"], 
