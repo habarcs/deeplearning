@@ -9,20 +9,28 @@
 
 # installing packages, use specific versions
 # TODO: Make sure HELIP requirements are well included here
-# !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10
+# !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10 scipy==1.15.3 segmentation-models-pytorch==0.5.0
 
 import logging
 import math
 import os
+import re
 from collections import OrderedDict
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Optional, Tuple, Union
 
 import open_clip
+import PIL.Image
+import segmentation_models_pytorch as smp
 import torch
 import torch.nn.functional as F
 import torchvision
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader
+from torchvision.datasets import Flowers102
+from torchvision.datasets.utils import download_and_extract_archive
+from torchvision.transforms.functional import pil_to_tensor
 from tqdm import tqdm
 
 import wandb
@@ -39,7 +47,17 @@ CFG = {
         },
         "text_encoder": {},
     },
-    "wandb": True,
+    "bg-masking": {
+        "enabled": True,
+        # available options: https://smp.readthedocs.io/en/latest/encoders.html
+        "backbone": "unet",
+        "encoder": {
+            "name": "mobilenet_v2",
+            "weights": "imagenet",
+        },
+        "training": {"epochs": 1, "batch_size": 8, "image_size": 224},
+    },
+    "wandb": False,
     "training": {
         "resume_id": None,
         "resume_from": "best",
@@ -135,6 +153,60 @@ DEVICE = (
     else "cpu"
 )
 LOGGER.info(f"Using {DEVICE} device")
+
+
+class Flowers102WithSeqmentation(Flowers102):
+    """
+    Flowers102 dataset with seqmentation
+    if segmentation_training is enabled, __getitem__ will return the segmentation mask instead of the label
+    can be disabled after initialization
+    """
+
+    def __init__(
+        self,
+        root: Union[str, Path],
+        split: str = "train",
+        transform: Optional[Callable] = None,
+        target_transform: Optional[Callable] = None,
+        mask_transform: Optional[Callable] = None,
+        download: bool = False,
+        segmentation_training: bool = False,
+    ) -> None:
+        self.segmentation_training = segmentation_training
+        self._file_dict["seg"] = ("102segmentations.tgz", "51375996b6c4f367a4b9f4492d7ecef5")
+        self.mask_transform = mask_transform
+        super().__init__(root, split, transform, target_transform, download)
+        self._seg_folder = self._base_folder / "segmim"
+        self._image_segs = []
+        for image_file in self._image_files:
+            self._image_segs.append(self._seg_folder / re.sub(r"image_", "segmim_", image_file.name))
+
+    def get_bg_mask(self, idx: int) -> Any:
+        seg_file = self._image_segs[idx]
+        seg_image = PIL.Image.open(seg_file).convert("RGB")
+        seg = pil_to_tensor(seg_image)
+        # inverting the bg mask, to get 0 for background
+        mask = ~((seg[0] == 0) & (seg[1] == 0) & (seg[2] == 254))  # 0 0 254 blue represents the bg in the segmentation
+        mask = mask.int()
+        if self.mask_transform:
+            mask = self.mask_transform(mask)
+        return mask
+
+    def __getitem__(self, idx: int) -> Tuple[Any, Any]:
+        image, label = super().__getitem__(idx)
+        if self.segmentation_training:
+            mask = self.get_bg_mask(idx)
+            return image, mask
+        return image, label
+
+    def download(self):
+        super().download()
+        download_and_extract_archive(
+            f"{self._download_url_prefix}{self._file_dict['seg'][0]}",
+            str(self._base_folder),
+            md5=self._file_dict["seg"][1],
+        )
+
 
 CLASS_NAMES = [
     "pink primrose",
@@ -242,17 +314,36 @@ CLASS_NAMES = [
 ]
 
 
-def get_data(data_dir="./data", train_transform=None, test_transform=None):
-    LOGGER.info(f"Loading Flowers102 dataset from {data_dir}")
+def get_data(
+    data_dir="./data", train_transform=None, test_transform=None, mask_transform=None, segmentation_training=False
+):
+    LOGGER.info(
+        f"Loading Flowers102 dataset from {data_dir} {'for segmentation training' if segmentation_training else ''}"
+    )
 
-    train = torchvision.datasets.Flowers102(
-        root=data_dir, split="train", download=True, transform=train_transform
+    train = Flowers102WithSeqmentation(
+        root=data_dir,
+        split="train",
+        download=True,
+        transform=train_transform,
+        mask_transform=mask_transform,
+        segmentation_training=segmentation_training,
     )
-    val = torchvision.datasets.Flowers102(
-        root=data_dir, split="val", download=True, transform=test_transform
+    val = Flowers102WithSeqmentation(
+        root=data_dir,
+        split="val",
+        download=True,
+        transform=test_transform,
+        mask_transform=mask_transform,
+        segmentation_training=segmentation_training,
     )
-    test = torchvision.datasets.Flowers102(
-        root=data_dir, split="test", download=True, transform=test_transform
+    test = Flowers102WithSeqmentation(
+        root=data_dir,
+        split="test",
+        download=True,
+        transform=test_transform,
+        mask_transform=mask_transform,
+        segmentation_training=segmentation_training,
     )
 
     LOGGER.info(f"Dataset loaded: {len(train)} train, {len(val)} val, {len(test)} test")
@@ -1405,13 +1496,15 @@ class PromptLearner(torch.nn.Module):
 
 
 class CustomCLIP(torch.nn.Module):
-    def __init__(self, classnames, clip_model, tokenizer):
+    def __init__(self, classnames, clip_model, tokenizer, segmentation_model, segmentation_transform):
         super().__init__()
         self.prompt_learner = PromptLearner(classnames, clip_model, tokenizer)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
+        self.segmentation_model = segmentation_model
+        self.segmentation_tranforms = segmentation_transform
         # HELIP: Store the text features for later use
         self.text_features = None
 
@@ -1423,6 +1516,12 @@ class CustomCLIP(torch.nn.Module):
         # End PromptSRC
 
     def forward(self, image, label=None):
+        if self.segmentation_model:
+            seg_input = self.segmentation_tranforms(image) if self.segmentation_tranforms else image
+            mask = self.segmentation_model(seg_input)
+            binary_mask = (mask > 0.5).int()
+            image = binary_mask * image
+
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
@@ -1532,10 +1631,24 @@ def create_base_model():
     tokenizer = open_clip.get_tokenizer(CFG["COCOOP"]["base_model"]["name"])
     return model, preprocess, tokenizer
 
+def create_segmentation_model():
+    model = smp.create_model(
+        arch=CFG["bg-masking"]["backbone"],
+        encoder_name=CFG["bg-masking"]["encoder"]["name"],
+        classes=1,
+        activation="sigmoid",
+        encoder_weights=CFG["bg-masking"]["encoder"]["weights"],
+    ).to(DEVICE)
+    params = smp.encoders.get_preprocessing_params(
+        encoder_name=CFG["bg-masking"]["encoder"]["name"], pretrained=CFG["bg-masking"]["encoder"]["weights"]
+    )
+    normalizer_transform = torchvision.transforms.Normalize(params["mean"], params["std"])
+    size_transform = torchvision.transforms.CenterCrop(CFG["bg-masking"]["training"]["image_size"])
+    return model, normalizer_transform, size_transform
 
-def create_custom_model():
+def create_custom_model(segmentation_model=None, segmentation_transform=None):
     base_model, preprocess, tokenizer = create_base_model()
-    model = CustomCLIP(CFG, CLASS_NAMES, base_model, tokenizer)
+    model = CustomCLIP(CLASS_NAMES, base_model, tokenizer, segmentation_model, segmentation_transform)
     return (
         model,
         preprocess,
@@ -1583,6 +1696,78 @@ def get_optimizer_and_scheduler(model):
 
     return optimizer, scheduler
 
+
+def fine_tune_segmenter(data_loader, val_data_loader, segmentation_model):
+    LOGGER.info("Fine tuning segmenter!")
+    epochs = CFG["bg-masking"]["training"]["epochs"]
+    loss_fn = smp.losses.DiceLoss(mode=smp.losses.constants.BINARY_MODE)
+    optimizer = torch.optim.Adam(segmentation_model.parameters())
+    segmentation_model.train()
+    for epoch in range(epochs):
+        progress_bar = tqdm(data_loader, desc=f"Segmentation train Epoch {epoch}")
+        total_loss = 0
+        for batch, (img, mask) in enumerate(progress_bar):
+            optimizer.zero_grad()
+            img = img.to(DEVICE)
+            mask = mask.to(DEVICE)
+            output = segmentation_model(img)
+            loss = loss_fn(output, mask)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+            progress_bar.set_postfix(
+                {
+                    "seg_loss": f"{loss.item():.4f}",
+                    "seg_avg_loss": f"{total_loss / (batch + 1):.4f}",
+                }
+            )
+
+            WANDB.log(
+                {
+                    "seg_train_loss": loss.item(),
+                    "seg_train_avg_loss": total_loss / (batch + 1),
+                }
+            )
+        avg_loss = total_loss / len(data_loader)
+        LOGGER.info(f"Segmentation epoch {epoch} - Segmentation training Loss: {avg_loss:.4f}")
+
+    LOGGER.info("Finished finetuning segmentation model, freezing all parameters")
+    for p in segmentation_model.parameters():
+        p.requires_grad = False
+
+    LOGGER.info("Testing segmentation model")
+    segmentation_model.eval()
+    test_loss = 0
+    for img, mask in val_data_loader:
+        img = img.to(DEVICE)
+        mask = mask.to(DEVICE)
+        pred = segmentation_model(img)
+        test_loss += loss_fn(pred, mask).item()
+    test_loss /= len(val_data_loader)
+    LOGGER.info(f"Segmentation model avarage test loss: {test_loss:.4f}")
+
+
+def setup_segmentation_module():
+    if CFG["bg-masking"]["enabled"]:
+        segmentation_model, normalizer_transform, size_transform = create_segmentation_model()
+        segmentation_transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), size_transform, normalizer_transform])
+        seg_train_set, seg_val_set, _ = get_data(
+            train_transform=segmentation_transform,
+            test_transform=segmentation_transform,
+            mask_transform=size_transform,
+            segmentation_training=True,
+        )
+        base_classes, _ = base_novel_categories(seg_train_set)
+        seg_train_base, _ = split_data(seg_train_set, base_classes)
+        seg_val_base, _ = split_data(seg_val_set, base_classes)
+        seg_train_loader = DataLoader(seg_train_base, batch_size=CFG["bg-masking"]["training"]["batch_size"], shuffle=True)
+        seg_val_loader = DataLoader(seg_val_base, batch_size=CFG["bg-masking"]["training"]["batch_size"], shuffle=False)
+        fine_tune_segmenter(seg_train_loader, seg_val_loader, segmentation_model)
+    else:
+        segmentation_model = None
+        normalizer_transform = None
+    return segmentation_model, normalizer_transform
 
 # DataLoaders for training and evaluation + test_base, and test_novel
 def create_data_loaders(
@@ -1688,6 +1873,8 @@ def load_checkpoint(model, optimizer, scheduler, checkpoint_path):
 
 
 def train_cocoop():
+    segmentation_model, segmentation_transform = setup_segmentation_module()
+
     # Check if HELIP is enabled
     helip_enabled = CFG.get("helip", {}).get("enabled", False)
 
@@ -1713,7 +1900,7 @@ def train_cocoop():
 
     LOGGER.info("Creating models...")
     base_model, base_preprocess, tokenizer = create_base_model()
-    custom_model, _, _ = create_custom_model()
+    custom_model, _, _ = create_custom_model(segmentation_model, segmentation_transform)
     custom_model = custom_model.to(DEVICE)
 
     avg_model = None
@@ -1731,7 +1918,7 @@ def train_cocoop():
         LOGGER.info("Base model loaded for PromptSRC mutual agreement")
     # End PromptSRC
 
-    custom_model, _, _ = create_custom_model()
+    custom_model, _, _ = create_custom_model(segmentation_model, segmentation_transform)
     custom_model = custom_model.to(DEVICE)
 
     # Create data augmentation for training
@@ -2031,7 +2218,7 @@ def main():
 
         # Run training with HELIP configured via config
         LOGGER.info("Starting training...")
-        best_base_acc, best_novel_acc, best_hm = train_cocoop(CFG)
+        best_base_acc, best_novel_acc, best_hm = train_cocoop()
 
         # Final comparison
         LOGGER.info("==== Improvement Summary ====")
