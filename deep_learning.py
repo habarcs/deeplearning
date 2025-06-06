@@ -36,7 +36,6 @@ CFG = {
         "prompt_learner": {
             "n_ctx": 8,  # Reduced from 16 to save memory
             "ctx_init": "",
-            "prec": "fp16",
         },
         "text_encoder": {},
     },
@@ -351,7 +350,7 @@ class HardPairMining:
                     images
                 )  # This will populate self.model.text_features
 
-                image_features = self.model.image_encoder(images.type(self.model.dtype))
+                image_features = self.model.image_encoder(images)
                 image_features = image_features / image_features.norm(
                     dim=-1, keepdim=True
                 )
@@ -781,7 +780,7 @@ def train_loop(
 
             # Compute image features with gradients for HNML
             # Forward pass through image encoder - KEEP GRADIENTS for backward pass
-            image_features = model.image_encoder(images.type(model.dtype))
+            image_features = model.image_encoder(images)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
             # The forward pass already computed and stored text features in model.text_features
@@ -866,7 +865,7 @@ def train_loop(
             with torch.no_grad():
                 # rozen image features
                 original_image_features = base_model.encode_image(
-                    images.type(base_model.dtype)
+                    images
                 )
                 original_image_features = (
                     original_image_features
@@ -1250,14 +1249,13 @@ class TextEncoder(torch.nn.Module):
         self.positional_embedding = clip_model.positional_embedding
         self.ln_final = clip_model.ln_final
         self.text_projection = clip_model.text_projection
-        self.dtype = getattr(clip_model, "dtype", torch.float32)
 
     def forward(self, prompts, tokenized_prompts):
-        x = prompts + self.positional_embedding.type(self.dtype)
+        x = prompts + self.positional_embedding
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
-        x = self.ln_final(x).type(self.dtype)
+        x = self.ln_final(x)
 
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
@@ -1275,7 +1273,6 @@ class PromptLearner(torch.nn.Module):
         n_cls = len(classnames)
         n_ctx = CFG["COCOOP"]["prompt_learner"]["n_ctx"]
         ctx_init = CFG["COCOOP"]["prompt_learner"]["ctx_init"]
-        dtype = getattr(clip_model, "dtype", torch.float32)
         ctx_dim = clip_model.ln_final.weight.shape[0]
         vis_dim = clip_model.visual.output_dim
         clip_imsize = getattr(clip_model.visual, "input_resolution", 224)
@@ -1304,12 +1301,12 @@ class PromptLearner(torch.nn.Module):
             n_ctx = len(ctx_init.split(" "))
             prompt = tokenizer(ctx_init).to(DEVICE)
             with torch.no_grad():
-                embedding = clip_model.token_embedding(prompt).type(dtype)
+                embedding = clip_model.token_embedding(prompt)
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
             # random initialization
-            ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype, device=DEVICE)
+            ctx_vectors = torch.empty(n_ctx, ctx_dim, device=DEVICE)
             torch.nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
 
@@ -1328,9 +1325,6 @@ class PromptLearner(torch.nn.Module):
             )
         ).to(DEVICE)
 
-        if CFG["COCOOP"]["prompt_learner"]["prec"] == "fp16":
-            self.meta_net.half()
-
         classnames = [name.replace("_", " ") for name in classnames]
         # Use tokenizer to encode classnames safely
         name_lens = [len(tokenizer(name)) for name in classnames]
@@ -1341,7 +1335,7 @@ class PromptLearner(torch.nn.Module):
             DEVICE
         )  # (n_cls, n_tkn)
         with torch.no_grad():
-            embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
+            embedding = clip_model.token_embedding(tokenized_prompts)
 
         # These token vectors will be saved when in save_model(),
         # but they should be ignored in load_model() as we want to use
@@ -1379,10 +1373,6 @@ class PromptLearner(torch.nn.Module):
         prefix = self.token_prefix
         suffix = self.token_suffix
         ctx = self.ctx  # (n_ctx, ctx_dim)
-
-        # Ensure consistent precision between meta_net and im_features (this caused me an error)
-        if self.meta_net[0].weight.dtype != im_features.dtype:
-            im_features = im_features.to(self.meta_net[0].weight.dtype)
 
         bias = self.meta_net(im_features)  # (batch, ctx_dim)
         bias = bias.unsqueeze(1)  # (batch, 1, ctx_dim)
@@ -1422,7 +1412,6 @@ class CustomCLIP(torch.nn.Module):
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
-        self.dtype = getattr(clip_model, "dtype", torch.float32)
         # HELIP: Store the text features for later use
         self.text_features = None
 
@@ -1437,8 +1426,7 @@ class CustomCLIP(torch.nn.Module):
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
-        # Use the default precision for image features
-        image_features = self.image_encoder(image.type(self.dtype))
+        image_features = self.image_encoder(image)
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
         # Start PromptSRC
@@ -1446,14 +1434,7 @@ class CustomCLIP(torch.nn.Module):
         self.current_image_features = image_features
         # End PromptSRC
 
-        # If meta_net is using half precision, convert image_features to half precision for the prompt learner
-        if (
-            getattr(self.prompt_learner, "meta_net", None) is not None
-            and next(self.prompt_learner.meta_net.parameters()).dtype == torch.float16
-        ):
-            prompts = self.prompt_learner(image_features.half())
-        else:
-            prompts = self.prompt_learner(image_features)
+        prompts = self.prompt_learner(image_features)
 
         logits = []
 
