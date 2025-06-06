@@ -130,13 +130,12 @@ WANDB = (
     else wandb.init(mode="disabled")
 )
 
-# Sorry Marton but I kept device in lowercase to avoid problems downstream. Sue me.
-device = (
+DEVICE = (
     torch.accelerator.current_accelerator().type
     if torch.accelerator.is_available()
     else "cpu"
 )
-LOGGER.info(f"Using {device} device")
+LOGGER.info(f"Using {DEVICE} device")
 
 CLASS_NAMES = [
     "pink primrose",
@@ -300,16 +299,13 @@ def split_data(dataset, base_classes):
     return base_dataset, novel_dataset
 
 
-"""## Define training and testing loops"""
-
 # HELIP
 
 
 class HardPairMining:
-    def __init__(self, custom_clip_model, dataset, device, cfg):
+    def __init__(self, custom_clip_model, dataset):
         self.model = custom_clip_model
         self.dataset = dataset
-        self.device = device
         self.k = CFG["helip"]["k"]
         self.p = CFG["helip"]["p"]
         self.alpha = CFG["helip"]["alpha"]
@@ -347,11 +343,11 @@ class HardPairMining:
             for images, labels in tqdm(
                 dataloader, desc="Computing embeddings for HELIP"
             ):
-                images = images.to(self.device)
+                images = images.to(DEVICE)
 
                 # Run the full CoCoOp forward pass to get text features with the meta-network
                 # Important to use CoCoOp's prompt mechanism properly
-                logits = self.model(
+                _ = self.model(
                     images
                 )  # This will populate self.model.text_features
 
@@ -443,8 +439,8 @@ class HardPairMining:
             )
 
             # Get target embeddings
-            target_image_emb = all_image_features[target_idx].to(self.device)
-            target_text_emb = all_text_features[target_idx].to(self.device)
+            target_image_emb = all_image_features[target_idx].to(DEVICE)
+            target_text_emb = all_text_features[target_idx].to(DEVICE)
 
             # Randomly sample p candidate pairs
             total_samples = len(all_image_features)
@@ -457,8 +453,8 @@ class HardPairMining:
                 if idx == target_idx:
                     continue
 
-                candidate_image_emb = all_image_features[idx].to(self.device)
-                candidate_text_emb = all_text_features[idx].to(self.device)
+                candidate_image_emb = all_image_features[idx].to(DEVICE)
+                candidate_text_emb = all_text_features[idx].to(DEVICE)
 
                 i2t_score = torch.matmul(
                     target_image_emb.flatten(), candidate_text_emb.flatten()
@@ -489,16 +485,15 @@ def hard_negative_margin_loss(
     alpha=0.05,  # Margin parameter (originally set at 0.25, flexibilized, should be tested)
 ):
     batch_size = image_features.shape[0]
-    device = image_features.device
 
     # Calculate similarity matrix between all images and texts
     sim_matrix = image_features @ text_features.T
 
     # Define positive pair similarities (diagonal elements)
-    pos_idx = torch.arange(batch_size, device=device)
+    pos_idx = torch.arange(batch_size, device=DEVICE)
     pos_sim = sim_matrix[pos_idx, pos_idx]
 
-    hnml_loss = torch.tensor(0.0, device=device)
+    hnml_loss = torch.tensor(0.0, device=DEVICE)
     count = 0
 
     for i in range(batch_size):
@@ -509,7 +504,7 @@ def hard_negative_margin_loss(
             continue
 
         hard_indices_list = hard_pairs_indices[sample_idx]
-        hard_indices = torch.tensor(hard_indices_list, device=device)
+        hard_indices = torch.tensor(hard_indices_list, device=DEVICE)
 
         # Find indices that are in the current batch
         batch_mask = hard_indices < batch_size
@@ -556,18 +551,18 @@ class PromptEnsemble:
             self.prompt_history.pop(0)
 
     # Create Gaussian-weighted ensemble of prompts
-    def get_ensemble_prompt(self, device):
+    def get_ensemble_prompt(self):
         if not self.prompt_history:
             return None
 
-        device_prompts = [p.to(device) for p in self.prompt_history]
+        device_prompts = [p.to(DEVICE) for p in self.prompt_history]
 
         # Compute Gaussian weights favoring recent prompts
         weights = [
             math.exp(-((len(device_prompts) - 1 - i) ** 2) / (2 * self.sigma**2))
             for i in range(len(device_prompts))
         ]
-        weights = torch.tensor(weights, device=device)
+        weights = torch.tensor(weights, device=DEVICE)
         weights = weights / weights.sum()
 
         # Weighted ensemble
@@ -651,7 +646,6 @@ def train_loop(
     avg_model,
     optimizer,
     epoch,
-    device,
     scheduler=None,
     # HELIP
     use_helip=False,
@@ -714,7 +708,7 @@ def train_loop(
     # Training loop
     for batch_idx, (images, targets) in enumerate(progress_bar):
         # Move data to device
-        images, targets = images.to(device), targets.to(device)
+        images, targets = images.to(DEVICE), targets.to(DEVICE)
 
         # Zero gradients
         optimizer.zero_grad()
@@ -755,12 +749,12 @@ def train_loop(
         total_contrastive_loss += cont_loss_val
 
         # Initialize additional losses
-        hnml = torch.tensor(0.0, device=device)
+        hnml = torch.tensor(0.0, device=DEVICE)
         hnml_val = 0.0
 
         # Initialize PromptSRC losses
-        ma_loss = torch.tensor(0.0, device=device)
-        td_loss = torch.tensor(0.0, device=device)
+        ma_loss = torch.tensor(0.0, device=DEVICE)
+        td_loss = torch.tensor(0.0, device=DEVICE)
         ma_loss_val = 0.0
         td_loss_val = 0.0
 
@@ -808,7 +802,7 @@ def train_loop(
                     )
                     # Fall back to just contrastive loss
                     loss = contrastive_loss
-                    hnml = torch.tensor(0.0, device=device)
+                    hnml = torch.tensor(0.0, device=DEVICE)
                     hnml_val = 0.0
                 else:
                     # Compute Hard Negative Margin Loss
@@ -851,7 +845,7 @@ def train_loop(
             else:
                 # If we couldn't get text features, just use contrastive loss
                 loss = contrastive_loss
-                hnml = torch.tensor(0.0, device=device)
+                hnml = torch.tensor(0.0, device=DEVICE)
                 hnml_val = 0.0
         else:
             loss = contrastive_loss
@@ -886,7 +880,7 @@ def train_loop(
                             f"a photo of a {CLASS_NAMES[t.item()]}, a type of flower."
                             for t in targets
                         ]
-                    ).to(device)
+                    ).to(DEVICE)
                 )
                 original_text_features = (
                     original_text_features
@@ -1090,7 +1084,7 @@ def train_loop(
 
 
 @torch.no_grad()
-def eval(model, dataset, categories, batch_size, device, tokenizer, label=""):
+def eval(model, dataset, categories, batch_size, tokenizer, label=""):
     model.eval()
 
     # Remap labels into a contiguous set starting from zero
@@ -1100,7 +1094,7 @@ def eval(model, dataset, categories, batch_size, device, tokenizer, label=""):
     # and immediately tokenize each sentence (convert natural language into numbers - feel free to print the text input to inspect them)
     text_inputs = tokenizer(
         [f"a photo of a {CLASS_NAMES[c]}, a type of flower." for c in categories]
-    ).to(device)
+    ).to(DEVICE)
 
     # we can encode the text features once as they are shared for all images
     # therefore we do it outside the evaluation loop
@@ -1122,8 +1116,8 @@ def eval(model, dataset, categories, batch_size, device, tokenizer, label=""):
         # Labels needs to be .long() in pytorch
         target = torch.Tensor([contig_cat2idx[t.item()] for t in target]).long()
 
-        image = image.to(device)
-        target = target.to(device)
+        image = image.to(DEVICE)
+        target = target.to(DEVICE)
 
         # forward image through CLIP image encoder
         image_features = model.encode_image(image)
@@ -1148,7 +1142,7 @@ def harmonic_mean(base_accuracy, novel_accuracy):
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, device, epoch, split="val"):
+def evaluate(model, dataloader, epoch, split="val"):
     model.eval()
     total_loss = 0
     correct = 0
@@ -1159,7 +1153,7 @@ def evaluate(model, dataloader, device, epoch, split="val"):
 
     for batch_idx, (images, targets) in enumerate(progress_bar):
         # Move data to device
-        images, targets = images.to(device), targets.to(device)
+        images, targets = images.to(DEVICE), targets.to(DEVICE)
 
         # Forward pass
         outputs = model(images)
@@ -1200,7 +1194,6 @@ def eval_with_both_categories(
     test_novel_loader,
     base_classes,
     novel_classes,
-    device,
     tokenizer,
     epoch,
 ):
@@ -1214,7 +1207,6 @@ def eval_with_both_categories(
         dataset=test_base_dataset,
         categories=base_classes,
         batch_size=128,
-        device=device,
         tokenizer=tokenizer,
         label=f"Epoch {epoch} - Base Classes",
     )
@@ -1224,7 +1216,6 @@ def eval_with_both_categories(
         dataset=test_novel_dataset,
         categories=novel_classes,
         batch_size=128,
-        device=device,
         tokenizer=tokenizer,
         label=f"Epoch {epoch} - Novel Classes",
     )
@@ -1253,7 +1244,7 @@ def eval_with_both_categories(
 
 
 class TextEncoder(torch.nn.Module):
-    def __init__(self, clip_model, device):
+    def __init__(self, clip_model):
         super().__init__()
         self.transformer = clip_model.transformer
         self.positional_embedding = clip_model.positional_embedding
@@ -1279,7 +1270,7 @@ class TextEncoder(torch.nn.Module):
 
 
 class PromptLearner(torch.nn.Module):
-    def __init__(self, cfg, classnames, clip_model, tokenizer, device):
+    def __init__(self, classnames, clip_model, tokenizer):
         super().__init__()
         n_cls = len(classnames)
         n_ctx = CFG["COCOOP"]["prompt_learner"]["n_ctx"]
@@ -1311,14 +1302,14 @@ class PromptLearner(torch.nn.Module):
             # use given words to initialize context vectors
             ctx_init = ctx_init.replace("_", " ")
             n_ctx = len(ctx_init.split(" "))
-            prompt = tokenizer(ctx_init).to(device)
+            prompt = tokenizer(ctx_init).to(DEVICE)
             with torch.no_grad():
                 embedding = clip_model.token_embedding(prompt).type(dtype)
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
             # random initialization
-            ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype, device=device)
+            ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype, device=DEVICE)
             torch.nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
 
@@ -1335,7 +1326,7 @@ class PromptLearner(torch.nn.Module):
                     ("linear2", torch.nn.Linear(vis_dim // 16, ctx_dim)),
                 ]
             )
-        ).to(device)
+        ).to(DEVICE)
 
         if CFG["COCOOP"]["prompt_learner"]["prec"] == "fp16":
             self.meta_net.half()
@@ -1347,7 +1338,7 @@ class PromptLearner(torch.nn.Module):
 
         # Move tokenized prompts to the correct device
         tokenized_prompts = torch.cat([tokenizer(p) for p in prompts]).to(
-            device
+            DEVICE
         )  # (n_cls, n_tkn)
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
@@ -1404,7 +1395,7 @@ class PromptLearner(torch.nn.Module):
             self.prompt_ensemble.update(ctx_shifted)
 
             # Get ensemble prompt if available
-            ensemble_ctx = self.prompt_ensemble.get_ensemble_prompt(ctx_shifted.device)
+            ensemble_ctx = self.prompt_ensemble.get_ensemble_prompt()
             if ensemble_ctx is not None:
                 # Use ensemble context instead of current one during training
                 ctx_shifted = ensemble_ctx
@@ -1424,17 +1415,14 @@ class PromptLearner(torch.nn.Module):
 
 
 class CustomCLIP(torch.nn.Module):
-    def __init__(self, cfg, classnames, clip_model, tokenizer, device):
+    def __init__(self, classnames, clip_model, tokenizer):
         super().__init__()
-        self.prompt_learner = PromptLearner(
-            cfg, classnames, clip_model, tokenizer, device
-        )
+        self.prompt_learner = PromptLearner(classnames, clip_model, tokenizer)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
-        self.text_encoder = TextEncoder(clip_model, device)
+        self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
         self.dtype = getattr(clip_model, "dtype", torch.float32)
-        self.device = device
         # HELIP: Store the text features for later use
         self.text_features = None
 
@@ -1540,7 +1528,7 @@ class CustomCLIP(torch.nn.Module):
             for idx in class_indices
         ]
 
-        text_inputs = tokenizer(prompts).to(self.device)
+        text_inputs = tokenizer(prompts).to(DEVICE)
 
         # Forward through text encoder
         with torch.no_grad():
@@ -1552,11 +1540,10 @@ class CustomCLIP(torch.nn.Module):
     # End PromptSRC
 
 
-def create_base_model(device):
+def create_base_model():
     result = open_clip.create_model_from_pretrained(
         model_name=CFG["COCOOP"]["base_model"]["name"],
         pretrained=CFG["COCOOP"]["base_model"]["weights"],
-        device=device,
         return_transform=True,
     )
     assert isinstance(result, tuple)
@@ -1565,9 +1552,9 @@ def create_base_model(device):
     return model, preprocess, tokenizer
 
 
-def create_custom_model(device):
-    base_model, preprocess, tokenizer = create_base_model(device)
-    model = CustomCLIP(CFG, CLASS_NAMES, base_model, tokenizer, device)
+def create_custom_model():
+    base_model, preprocess, tokenizer = create_base_model()
+    model = CustomCLIP(CFG, CLASS_NAMES, base_model, tokenizer)
     return (
         model,
         preprocess,
@@ -1575,55 +1562,8 @@ def create_custom_model(device):
     )  # adding tokenizer in line with "self.prompt_learner" definiton
 
 
-"""## Initialize model"""
-
-device = (
-    torch.accelerator.current_accelerator().type
-    if torch.accelerator.is_available()
-    else "cpu"
-)
-print(f"Using {device} device")
-
-base_model, base_preprocess, base_tokenizer = create_base_model(device)
-custom_model, custom_preprocess, custom_tokenizer = create_custom_model(device)
-print(base_model)
-
-"""# Load and prepare data
-
-"""
-
-# Create data augmentation for training
-# TODO: Explore better augmentations, this is just boiler-plate
-train_transform = torchvision.transforms.Compose(
-    [
-        torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
-        torchvision.transforms.RandomHorizontalFlip(),
-        torchvision.transforms.ColorJitter(
-            brightness=0.4, contrast=0.4, saturation=0.4
-        ),
-        base_preprocess,
-    ]
-)
-
-# get the three datasets
-train_set, val_set, test_set = get_data(
-    train_transform=train_transform,  # Apply augmentations to training set
-    test_transform=base_preprocess,  # Only basic preprocessing for val/test
-)
-
-# split classes into base and novel
-base_classes, novel_classes = base_novel_categories(train_set)
-
-# split the three datasets
-train_base, _ = split_data(train_set, base_classes)
-val_base, _ = split_data(val_set, base_classes)
-test_base, test_novel = split_data(test_set, base_classes)
-
-"""## Train model"""
-
-
 # Define optimizer and LR scheduler.
-def get_optimizer_and_scheduler(model, cfg):
+def get_optimizer_and_scheduler(model):
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=CFG["training"]["optimizer"]["lr"],
@@ -1743,10 +1683,10 @@ def save_checkpoint(
         LOGGER.info(f"Saved best model with accuracy {accuracy:.4f} at {best_path}")
 
 
-def load_checkpoint(model, optimizer, scheduler, checkpoint_path, device):
+def load_checkpoint(model, optimizer, scheduler, checkpoint_path):
     try:
         LOGGER.info(f"Loading checkpoint from {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
 
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
@@ -1766,7 +1706,7 @@ def load_checkpoint(model, optimizer, scheduler, checkpoint_path, device):
         return 0, 0.0
 
 
-def train_cocoop(cfg, device):
+def train_cocoop():
     # Check if HELIP is enabled
     helip_enabled = CFG.get("helip", {}).get("enabled", False)
 
@@ -1784,16 +1724,16 @@ def train_cocoop(cfg, device):
     else:
         LOGGER.info("==== Starting CoCoOp Training ====")
 
-    LOGGER.info(f"Config: {cfg}")
+    LOGGER.info(f"Config: {CFG}")
 
     torch.manual_seed(42)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(42)
 
     LOGGER.info("Creating models...")
-    base_model, base_preprocess, tokenizer = create_base_model(device)
-    custom_model, _, _ = create_custom_model(device)
-    custom_model = custom_model.to(device)
+    base_model, base_preprocess, tokenizer = create_base_model()
+    custom_model, _, _ = create_custom_model()
+    custom_model = custom_model.to(DEVICE)
 
     avg_model = None
     if CFG["validation"]["ema"]["enabled"]:
@@ -1805,13 +1745,13 @@ def train_cocoop(cfg, device):
 
     # For PromptSRC, keep base model on device for mutual agreement loss
     if promptsrc_enabled:
-        base_model = base_model.to(device)
+        base_model = base_model.to(DEVICE)
         base_model.eval()  # Keep base model in eval mode
         LOGGER.info("Base model loaded for PromptSRC mutual agreement")
     # End PromptSRC
 
-    custom_model, _, _ = create_custom_model(device)
-    custom_model = custom_model.to(device)
+    custom_model, _, _ = create_custom_model()
+    custom_model = custom_model.to(DEVICE)
 
     # Create data augmentation for training
     train_transform = torchvision.transforms.Compose(
@@ -1855,7 +1795,7 @@ def train_cocoop(cfg, device):
 
     # Create optimizer and scheduler
     LOGGER.info("Setting up optimizer and scheduler...")
-    optimizer, scheduler = get_optimizer_and_scheduler(custom_model, cfg)
+    optimizer, scheduler = get_optimizer_and_scheduler(custom_model)
 
     # Initialize HELIP if enabled
     hard_pair_miner = None
@@ -1863,7 +1803,7 @@ def train_cocoop(cfg, device):
         LOGGER.info("HELIP is enabled for training")
         # Initialize hard pair mining for base classes only
         hard_pair_miner = HardPairMining(
-            custom_clip_model=custom_model, dataset=train_base, device=device, cfg=CFG
+            custom_clip_model=custom_model, dataset=train_base
         )
     else:
         LOGGER.info("HELIP is disabled, using standard training")
@@ -1896,7 +1836,7 @@ def train_cocoop(cfg, device):
     if os.path.exists(checkpoint_path):
         LOGGER.info(f"Found checkpoint at {checkpoint_path}, resuming training...")
         start_epoch, best_accuracy = load_checkpoint(
-            custom_model, optimizer, scheduler, checkpoint_path, device
+            custom_model, optimizer, scheduler, checkpoint_path
         )
         start_epoch += 1  # Start from the next epoch
 
@@ -1909,7 +1849,6 @@ def train_cocoop(cfg, device):
         test_novel_loader=test_novel_loader,
         base_classes=base_classes,
         novel_classes=novel_classes,
-        device=device,
         tokenizer=tokenizer,
         epoch=0,
     )
@@ -1924,13 +1863,12 @@ def train_cocoop(cfg, device):
     LOGGER.info("Starting training...")
     for epoch in range(start_epoch, CFG["training"]["epochs"]):
         try:
-            train_loss = train_loop(
+            _ = train_loop(
                 dataloader=train_loader,
                 model=custom_model,
                 avg_model=avg_model,
                 optimizer=optimizer,
                 epoch=epoch + 1,
-                device=device,
                 scheduler=scheduler,
                 use_helip=helip_enabled,
                 hard_pair_miner=hard_pair_miner,
@@ -1958,7 +1896,6 @@ def train_cocoop(cfg, device):
             val_acc, val_loss = evaluate(
                 model=avg_model if avg_model else custom_model,
                 dataloader=val_loader,
-                device=device,
                 epoch=epoch + 1,
                 split="val",
             )
@@ -1971,7 +1908,6 @@ def train_cocoop(cfg, device):
                 test_novel_loader=test_novel_loader,
                 base_classes=base_classes,
                 novel_classes=novel_classes,
-                device=device,
                 tokenizer=tokenizer,
                 epoch=epoch + 1,
             )
@@ -2025,7 +1961,7 @@ def train_cocoop(cfg, device):
     # Load best model for final evaluation
     best_model_path = os.path.join(CFG["training"]["checkpoint_dir"], "model_best.pth")
     if os.path.exists(best_model_path):
-        _, _ = load_checkpoint(custom_model, optimizer, None, best_model_path, device)
+        _, _ = load_checkpoint(custom_model, optimizer, None, best_model_path)
 
     # Final evaluation
     LOGGER.info("==== Final Evaluation ====")
@@ -2036,7 +1972,6 @@ def train_cocoop(cfg, device):
         test_novel_loader=test_novel_loader,
         base_classes=base_classes,
         novel_classes=novel_classes,
-        device=device,
         tokenizer=tokenizer,
         epoch=CFG["training"]["epochs"] + 1,
     )
@@ -2061,15 +1996,8 @@ def train_cocoop(cfg, device):
 
 def main():
     try:
-        device = (
-            torch.accelerator.current_accelerator().type
-            if torch.accelerator.is_available()
-            else "cpu"
-        )
-        LOGGER.info(f"Using {device} device")
-
         # Initial zero-shot evaluation with the base model
-        base_model, base_preprocess, base_tokenizer = create_base_model(device)
+        base_model, base_preprocess, base_tokenizer = create_base_model()
 
         train_transform = torchvision.transforms.Compose(
             [
@@ -2101,7 +2029,6 @@ def main():
             dataset=test_base,
             categories=base_classes,
             batch_size=128,
-            device=device,
             tokenizer=base_tokenizer,
             label="🧠 Zero-shot evaluation on Base Classes",
         )
@@ -2110,7 +2037,6 @@ def main():
             dataset=test_novel,
             categories=novel_classes,
             batch_size=128,
-            device=device,
             tokenizer=base_tokenizer,
             label="🧠 Zero-shot evaluation on Novel Classes",
         )
@@ -2124,7 +2050,7 @@ def main():
 
         # Run training with HELIP configured via config
         LOGGER.info("Starting training...")
-        best_base_acc, best_novel_acc, best_hm = train_cocoop(CFG, device)
+        best_base_acc, best_novel_acc, best_hm = train_cocoop(CFG)
 
         # Final comparison
         LOGGER.info("==== Improvement Summary ====")
