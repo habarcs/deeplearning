@@ -55,9 +55,9 @@ CFG = {
             "name": "mobilenet_v2",
             "weights": "imagenet",
         },
-        "training": {"epochs": 1, "batch_size": 8, "image_size": 224},
+        "training": {"epochs": 3, "batch_size": 64, "image_size": 224},
     },
-    "wandb": False,
+    "wandb": True,
     "training": {
         "resume_id": None,
         "resume_from": "best",
@@ -1203,20 +1203,19 @@ def harmonic_mean(base_accuracy, novel_accuracy):
 # Evaluate model on both base and novel categories and compute harmonic mean
 def eval_with_both_categories(
     custom_model,
-    base_model,
     test_base_loader,
     test_novel_loader,
     epoch,
 ):
     # Evaluate on base and novel categories
     base_accuracy = evaluate(
-        model=custom_model if epoch > 0 else base_model,
+        model=custom_model,
         dataloader=test_base_loader,
         label=f"Epoch {epoch} - Base Classes",
     )
 
     novel_accuracy = evaluate(
-        model=custom_model if epoch > 0 else base_model,
+        model=custom_model,
         dataloader=test_novel_loader,
         label=f"Epoch {epoch} - Novel Classes",
     )
@@ -1948,12 +1947,8 @@ def train_cocoop():
     LOGGER.info("Evaluating zero-shot performance of base model...")
     base_zero_shot_acc, novel_zero_shot_acc, zero_shot_hm = eval_with_both_categories(
         custom_model=custom_model,
-        base_model=base_model,
         test_base_loader=test_base_loader,
         test_novel_loader=test_novel_loader,
-        base_classes=base_classes,
-        novel_classes=novel_classes,
-        tokenizer=tokenizer,
         epoch=0,
     )
 
@@ -2056,12 +2051,8 @@ def train_cocoop():
     LOGGER.info("==== Final Evaluation ====")
     final_base_acc, final_novel_acc, final_hm = eval_with_both_categories(
         custom_model=custom_model,
-        base_model=base_model,
         test_base_loader=test_base_loader,
         test_novel_loader=test_novel_loader,
-        base_classes=base_classes,
-        novel_classes=novel_classes,
-        tokenizer=tokenizer,
         epoch=CFG["training"]["epochs"] + 1,
     )
 
