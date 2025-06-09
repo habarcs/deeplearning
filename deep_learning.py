@@ -1185,8 +1185,7 @@ def evaluate(model, dataloader, label=""):
         target = target.to(DEVICE)
 
         predicted_class = model(image)
-
-        correct_predictions += (predicted_class == target).sum().item()
+        correct_predictions += (predicted_class.argmax(1) == target).type(torch.float).sum().item()
 
     # and now we compute the accuracy
     accuracy = correct_predictions / len(dataloader.dataset)
@@ -1541,6 +1540,7 @@ def create_base_model():
     assert isinstance(result, tuple)
     model, preprocess = result
     tokenizer = open_clip.get_tokenizer(CFG["COCOOP"]["base_model"]["name"])
+    model = model.to(DEVICE)
     return model, preprocess, tokenizer
 
 def create_segmentation_model():
