@@ -42,7 +42,7 @@ CFG = {
             "weights": "laion2b_s34b_b79k",
         },
         "prompt_learner": {
-            "n_ctx": 8,  # Reduced from 16 to save memory
+            "n_ctx": 16,  # Reduced from 16 to save memory
             "ctx_init": "",
         },
         "text_encoder": {},
@@ -61,19 +61,20 @@ CFG = {
     "training": {
         "resume_id": None,
         "resume_from": "best",
-        "batch_size": 4,  # 32 is the default batch size for the ViT-B-32 model but it was crashing my local machine
-        "epochs": 3,  # TODO: More
+        "batch_size": 128,  # 32 is the default batch size for the ViT-B-32 model but it was crashing my local machine
+        "epochs": 50,  # TODO: More
         "warmup_epochs": 1,  # Possibly we'll need more
         "patience": 5,
         "checkpoint_dir": "./checkpoints",
         "optimizer": {
-            "lr": 0.002,  # TODO: test
-            "weight_decay": 0.05,  # TODO: test
+            "lr": 5e-4,  # TODO: test
+            "weight_decay": 0.02,  # TODO: test
         },
         "scheduler": {
-            "warmup_epochs": 1,
+            "warmup_epochs": 3,
         },
-        "augmentation_mode": "rotate_contrast_illumination",  # choose from: rotate_illumination, rotate_contrast, rotate_contrast_illumination
+        "augmentation_mode": "rotate_contrast_illumination",  # choose from: rotate_illumination, rotate_contrast, rotate_contrast_illumination,
+        "seed": 47,
     },
     "input": {
         "size": [224, 224]  # Input image size
@@ -93,7 +94,7 @@ CFG = {
         "enabled": True,
         "k": 5,  # Number of hard pairs to mine per sample, diminishing returns, in the paper they also suggested 3
         "p": 20,  # Number of random pairs to sample
-        "alpha": 0.05,  # Margin parameter for HNML (Hard Negative Mining Loss) # original: 0.25 # TUNE
+        "alpha": 0.25,  # Margin parameter for HNML (Hard Negative Mining Loss) # original: 0.25 # TUNE
         "lambda_hnml": 0.5,  # Weight for HNML in the combined loss -                                 # TUNE
         # TODO - 1: find a better value for key hyperparam
         # TODO - 2: balance this lambda with other regularizers lambdas, if all high, we'll underfit
@@ -1175,53 +1176,20 @@ def train_loop(
 
 
 @torch.no_grad()
-def eval(model, dataset, categories, batch_size, tokenizer, label=""):
+def evaluate(model, dataloader, label=""):
     model.eval()
-
-    # Remap labels into a contiguous set starting from zero
-    contig_cat2idx = {cat: idx for idx, cat in enumerate(categories)}
-
-    # here we apply the standard CLIP template used for oxford flowers to all categories
-    # and immediately tokenize each sentence (convert natural language into numbers - feel free to print the text input to inspect them)
-    text_inputs = tokenizer(
-        [f"a photo of a {CLASS_NAMES[c]}, a type of flower." for c in categories]
-    ).to(DEVICE)
-
-    # we can encode the text features once as they are shared for all images
-    # therefore we do it outside the evaluation loop
-    text_features = model.encode_text(text_inputs)
-    # and here we normalize them (standard pratice with CLIP)
-    text_features /= text_features.norm(dim=-1, keepdim=True)
-
-    # simple dataloader creation
-    dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=2
-    )
-
     # here we store the number of correct predictions we will make
     correct_predictions = 0
     for image, target in tqdm(dataloader, desc=label):
-        # base categories range from 0 to 50, whil novel ones from 51 to 101
-        # therefore we must map categories to the [0, 50], otherwise we will have wrong predictions
-        # Map targets in contiguous set starting from zero
-        # Labels needs to be .long() in pytorch
-        target = torch.Tensor([contig_cat2idx[t.item()] for t in target]).long()
-
         image = image.to(DEVICE)
         target = target.to(DEVICE)
 
-        # forward image through CLIP image encoder
-        image_features = model.encode_image(image)
-        # and normalize
-        image_features /= image_features.norm(dim=-1, keepdim=True)
+        predicted_class = model(image)
 
-        # here cosine similarity between image and text features and keep the argmax for every row (every image)
-        predicted_class = (image_features @ text_features.T).argmax(dim=-1)
-        # now we check which are correct, and sum them (False == 0, True == 1)
         correct_predictions += (predicted_class == target).sum().item()
 
     # and now we compute the accuracy
-    accuracy = correct_predictions / len(dataset)
+    accuracy = correct_predictions / len(dataloader.dataset)
     return accuracy
 
 
@@ -1232,82 +1200,24 @@ def harmonic_mean(base_accuracy, novel_accuracy):
     return hm
 
 
-@torch.no_grad()
-def evaluate(model, dataloader, epoch, split="val"):
-    model.eval()
-    total_loss = 0
-    correct = 0
-    total = 0
-
-    # Progress bar
-    progress_bar = tqdm(dataloader, desc=f"{split.capitalize()} Epoch {epoch}")
-
-    for batch_idx, (images, targets) in enumerate(progress_bar):
-        # Move data to device
-        images, targets = images.to(DEVICE), targets.to(DEVICE)
-
-        # Forward pass
-        outputs = model(images)
-        loss = F.cross_entropy(outputs, targets)
-
-        # Update metrics
-        total_loss += loss.item()
-        _, predicted = outputs.max(1)
-        total += targets.size(0)
-        correct += predicted.eq(targets).sum().item()
-
-        accuracy = 100.0 * correct / total
-
-        progress_bar.set_postfix(
-            {"loss": f"{loss.item():.4f}", "acc": f"{accuracy:.2f}%"}
-        )
-
-    # final metrics
-    avg_loss = total_loss / len(dataloader)
-    accuracy = correct / total
-
-    if split == "val":
-        WANDB.log(
-            {f"{split}_loss": avg_loss, f"{split}_accuracy": accuracy, "epoch": epoch}
-        )
-
-    LOGGER.info(
-        f"Epoch {epoch} - {split.capitalize()} Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}"
-    )
-    return accuracy, avg_loss
-
-
 # Evaluate model on both base and novel categories and compute harmonic mean
 def eval_with_both_categories(
     custom_model,
     base_model,
     test_base_loader,
     test_novel_loader,
-    base_classes,
-    novel_classes,
-    tokenizer,
     epoch,
 ):
-    # Create dataloader for the metrics
-    test_base_dataset = test_base_loader.dataset
-    test_novel_dataset = test_novel_loader.dataset
-
     # Evaluate on base and novel categories
-    base_accuracy = eval(
+    base_accuracy = evaluate(
         model=custom_model if epoch > 0 else base_model,
-        dataset=test_base_dataset,
-        categories=base_classes,
-        batch_size=128,
-        tokenizer=tokenizer,
+        dataloader=test_base_loader,
         label=f"Epoch {epoch} - Base Classes",
     )
 
-    novel_accuracy = eval(
+    novel_accuracy = evaluate(
         model=custom_model if epoch > 0 else base_model,
-        dataset=test_novel_dataset,
-        categories=novel_classes,
-        batch_size=128,
-        tokenizer=tokenizer,
+        dataloader=test_novel_loader,
         label=f"Epoch {epoch} - Novel Classes",
     )
 
@@ -1332,8 +1242,6 @@ def eval_with_both_categories(
 
 
 """## Define model"""
-
-
 class TextEncoder(torch.nn.Module):
     def __init__(self, clip_model):
         super().__init__()
@@ -1653,8 +1561,11 @@ def create_segmentation_model():
 
 def create_custom_model(segmentation_model=None, segmentation_transform=None):
     base_model, preprocess, tokenizer = create_base_model()
+    for param in base_model.parameters():
+        param.requires_grad = False
     model = CustomCLIP(CLASS_NAMES, base_model, tokenizer, segmentation_model, segmentation_transform)
     return (
+        base_model,
         model,
         preprocess,
         tokenizer,
@@ -1666,7 +1577,7 @@ def image_augmentation(mode="rotate_illumination", base_preprocess=None):
         return torchvision.transforms.Compose([
             torchvision.transforms.RandomRotation(degrees=30),
             torchvision.transforms.Lambda(lambda img: torchvision.transforms.functional.adjust_brightness(img, brightness_factor=np.random.uniform(1.1, 1.5))),
-            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+            torchvision.transforms.RandomResizedCrop(size=CFG["input"]["size"], scale=(0.7, 1.0)),
             torchvision.transforms.RandomHorizontalFlip(),
             base_preprocess
         ])
@@ -1674,7 +1585,7 @@ def image_augmentation(mode="rotate_illumination", base_preprocess=None):
         return torchvision.transforms.Compose([
             torchvision.transforms.RandomRotation(degrees=30),
             torchvision.transforms.Lambda(lambda img: torchvision.transforms.functional.adjust_contrast(img, contrast_factor=np.random.uniform(0.8, 2.0))),
-            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+            torchvision.transforms.RandomResizedCrop(size=CFG["input"]["size"], scale=(0.7, 1.0)),
             torchvision.transforms.RandomHorizontalFlip(),
             base_preprocess
         ])
@@ -1683,7 +1594,7 @@ def image_augmentation(mode="rotate_illumination", base_preprocess=None):
             torchvision.transforms.RandomRotation(degrees=30),
             torchvision.transforms.Lambda(lambda img: torchvision.transforms.functional.adjust_contrast(img, contrast_factor=np.random.uniform(0.8, 2.0))),
             torchvision.transforms.Lambda(lambda img: torchvision.transforms.functional.adjust_brightness(img, brightness_factor=np.random.uniform(1.1, 1.5))),
-            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
+            torchvision.transforms.RandomResizedCrop(size=CFG["input"]["size"], scale=(0.7, 1.0)),
             torchvision.transforms.RandomHorizontalFlip(),
             base_preprocess
         ])
@@ -1908,6 +1819,10 @@ def load_checkpoint(model, optimizer, scheduler, checkpoint_path):
 
 
 def train_cocoop():
+    torch.manual_seed(CFG["training"]["seed"])
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(CFG["training"]["seed"])
+
     segmentation_model, segmentation_transform = setup_segmentation_module()
 
     # Check if HELIP is enabled
@@ -1929,14 +1844,16 @@ def train_cocoop():
 
     LOGGER.info(f"Config: {CFG}")
 
-    torch.manual_seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
-
     LOGGER.info("Creating models...")
-    base_model, base_preprocess, tokenizer = create_base_model()
-    custom_model, _, _ = create_custom_model(segmentation_model, segmentation_transform)
+    base_model, custom_model, base_preprocess, tokenizer = create_custom_model(segmentation_model, segmentation_transform)
+    base_model = base_model.to(DEVICE)
     custom_model = custom_model.to(DEVICE)
+
+    augmentation_mode = CFG.get("augmentation_mode", "rotate_illumination")  # Default fallback
+    train_transform = image_augmentation(
+        mode=augmentation_mode, 
+        base_preprocess=base_preprocess
+    )
 
     avg_model = None
     if CFG["validation"]["ema"]["enabled"]:
@@ -1947,26 +1864,13 @@ def train_cocoop():
         LOGGER.info(f"Created EMA model with decay {CFG['validation']['ema']['decay']}")
 
     # For PromptSRC, keep base model on device for mutual agreement loss
-    if promptsrc_enabled:
-        base_model = base_model.to(DEVICE)
-        base_model.eval()  # Keep base model in eval mode
-        LOGGER.info("Base model loaded for PromptSRC mutual agreement")
+    # TODO check if its needed Joaquin!!!!
+    # if promptsrc_enabled:
+    #     base_model = base_model.to(DEVICE)
+    #     base_model.eval()  # Keep base model in eval mode
+    #     LOGGER.info("Base model loaded for PromptSRC mutual agreement")
     # End PromptSRC
 
-    custom_model, _, _ = create_custom_model(segmentation_model, segmentation_transform)
-    custom_model = custom_model.to(DEVICE)
-
-    # Create data augmentation for training
-    train_transform = torchvision.transforms.Compose(
-        [
-            torchvision.transforms.RandomResizedCrop(size=224, scale=(0.7, 1.0)),
-            torchvision.transforms.RandomHorizontalFlip(),
-            torchvision.transforms.ColorJitter(
-                brightness=0.4, contrast=0.4, saturation=0.4
-            ),
-            base_preprocess,
-        ]
-    )
 
     # Get datasets with transforms
     LOGGER.info("Loading datasets...")
@@ -2029,9 +1933,6 @@ def train_cocoop():
     # Training setup
     start_epoch = 0
     best_accuracy = 0.0
-    best_base_acc = 0.0
-    best_novel_acc = 0.0
-    best_hm = 0.0
     patience_counter = 0
 
     # Check for resume training
@@ -2095,32 +1996,17 @@ def train_cocoop():
                 # End PromptSRC
             )
 
-            # Evaluate on validation set
-            val_acc, val_loss = evaluate(
-                model=avg_model if avg_model else custom_model,
-                dataloader=val_loader,
-                epoch=epoch + 1,
-                split="val",
-            )
-
             # Evaluate on test sets (base and novel)
-            base_acc, novel_acc, hm = eval_with_both_categories(
-                custom_model=custom_model,
-                base_model=base_model,
-                test_base_loader=test_base_loader,
-                test_novel_loader=test_novel_loader,
-                base_classes=base_classes,
-                novel_classes=novel_classes,
-                tokenizer=tokenizer,
-                epoch=epoch + 1,
+            val_acc = evaluate(
+                custom_model,
+                val_loader,
+                label=f"{epoch+1} validation"
             )
 
             # Check if this is the best model (by harmonic mean)
-            is_best = hm > best_hm
+            is_best = val_acc > best_accuracy
             if is_best:
-                best_hm = hm
-                best_base_acc = base_acc
-                best_novel_acc = novel_acc
+                best_accuracy = val_acc
                 patience_counter = 0
             else:
                 patience_counter += 1
@@ -2132,8 +2018,8 @@ def train_cocoop():
                 optimizer=optimizer,
                 scheduler=scheduler,
                 epoch=epoch + 1,
-                accuracy=hm,
-                best_acc=best_hm,
+                accuracy=val_acc,
+                best_acc=best_accuracy,
                 checkpoint_dir=CFG["training"]["checkpoint_dir"],
                 is_best=is_best,
             )
@@ -2154,8 +2040,8 @@ def train_cocoop():
                 optimizer=optimizer,
                 scheduler=scheduler,
                 epoch=epoch + 1,
-                accuracy=best_hm,
-                best_acc=best_hm,
+                accuracy=val_acc,
+                best_acc=best_accuracy,
                 checkpoint_dir=CFG["training"]["checkpoint_dir"],
                 is_best=False,
             )
@@ -2194,61 +2080,18 @@ def train_cocoop():
     )
 
     # Return best results
-    return best_base_acc, best_novel_acc, best_hm
+    return final_base_acc, final_novel_acc, final_hm
 
 
 def main():
     try:
-        # Initial zero-shot evaluation with the base model
-        base_model, base_preprocess, base_tokenizer = create_base_model()
-
-        augmentation_mode = CFG.get("augmentation_mode", "rotate_illumination")  # Default fallback
-        train_transform = train_transform(
-            mode=augmentation_mode, 
-            base_preprocess=base_preprocess
-        )
-
-        train_set, val_set, test_set = get_data(
-            data_dir=CFG["data"]["data_dir"],
-            train_transform=train_transform,
-            test_transform=base_preprocess,
-        )
-
-        base_classes, novel_classes = base_novel_categories(train_set)
-
-        train_base, _ = split_data(train_set, base_classes)
-        val_base, _ = split_data(val_set, base_classes)
-        test_base, test_novel = split_data(test_set, base_classes)
-
-        # Initial zero-shot evaluation
-        LOGGER.info("Running initial zero-shot evaluation...")
-        base_accuracy = eval(
-            model=base_model,
-            dataset=test_base,
-            categories=base_classes,
-            batch_size=128,
-            tokenizer=base_tokenizer,
-            label="🧠 Zero-shot evaluation on Base Classes",
-        )
-        novel_accuracy = eval(
-            model=base_model,
-            dataset=test_novel,
-            categories=novel_classes,
-            batch_size=128,
-            tokenizer=base_tokenizer,
-            label="🧠 Zero-shot evaluation on Novel Classes",
-        )
-
-        hm = harmonic_mean(base_accuracy, novel_accuracy)
-
-        LOGGER.info("==== Zero-shot Evaluation Results ====")
-        LOGGER.info(f"🔍 Base classes accuracy: {base_accuracy * 100:.2f}%")
-        LOGGER.info(f"🔍 Novel classes accuracy: {novel_accuracy * 100:.2f}%")
-        LOGGER.info(f"🔍 Harmonic Mean: {hm * 100:.2f}%")
-
         # Run training with HELIP configured via config
         LOGGER.info("Starting training...")
+        base_accuracy = 0.0
+        novel_accuracy = 0.0
         best_base_acc, best_novel_acc, best_hm = train_cocoop()
+        og_hm = harmonic_mean(base_accuracy, novel_accuracy)
+        best_hm = harmonic_mean(best_base_acc, best_novel_acc)
 
         # Final comparison
         LOGGER.info("==== Improvement Summary ====")
@@ -2261,8 +2104,8 @@ def main():
             f"(+{(best_novel_acc - novel_accuracy) * 100:.2f}%)"
         )
         LOGGER.info(
-            f"Harmonic Mean: {hm * 100:.2f}% -> {best_hm * 100:.2f}% "
-            f"(+{(best_hm - hm) * 100:.2f}%)"
+            f"Harmonic Mean: {og_hm * 100:.2f}% -> {best_hm * 100:.2f}% "
+            f"(+{(best_hm - og_hm) * 100:.2f}%)"
         )
 
     except Exception as e:
