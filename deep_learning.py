@@ -82,7 +82,7 @@ CFG = {
     },
     "data": {
         "data_dir": "./data",
-        "num_workers": 0,  # Enable parallel data loading when running in cloud, use 2 or 4
+        "num_workers": 2,  # Enable parallel data loading when running in cloud, use 2 or 4
         "pin_memory": False,  # Idem
     },
     "validation": {
