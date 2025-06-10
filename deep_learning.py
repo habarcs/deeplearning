@@ -11,6 +11,7 @@
 # TODO: Make sure HELIP requirements are well included here
 # !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10 scipy==1.15.3 segmentation-models-pytorch==0.5.0
 
+import numpy as np
 import logging
 import math
 import os
@@ -48,7 +49,7 @@ CFG = {
         "text_encoder": {},
     },
     "bg-masking": {
-        "enabled": True,
+        "enabled": False,
         # available options: https://smp.readthedocs.io/en/latest/encoders.html
         "backbone": "unet",
         "encoder": {
@@ -86,12 +87,12 @@ CFG = {
     },
     "validation": {
         "ema": {
-            "enabled": True,
+            "enabled": False,
             "decay": 0.999,
         }
     },
     "helip": {
-        "enabled": True,
+        "enabled": False,
         "k": 5,  # Number of hard pairs to mine per sample, diminishing returns, in the paper they also suggested 3
         "p": 20,  # Number of random pairs to sample
         "alpha": 0.25,  # Margin parameter for HNML (Hard Negative Mining Loss) # original: 0.25 # TUNE
@@ -103,7 +104,7 @@ CFG = {
         "cache_embeddings": True,  # Whether to cache embeddings between epochs, to avoid recomputing them
     },
     "promptsrc": {
-        "enabled": True,
+        "enabled": False,
         "mutual_agreement": {
             "lambda_ma": 0.5,  # Weight for mutual agreement loss                                 # TUNE
             "temperature": 0.07,  # Temperature scaling parameter
