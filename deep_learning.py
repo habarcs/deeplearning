@@ -74,7 +74,7 @@ CFG = {
         "scheduler": {
             "warmup_epochs": 3,
         },
-        "augmentation_mode": "rotate_contrast_illumination",  # choose from: rotate_illumination, rotate_contrast, rotate_contrast_illumination,
+        "augmentation_mode": None,  # choose from: rotate_illumination, rotate_contrast, rotate_contrast_illumination,
         "seed": 47,
     },
     "input": {
@@ -1572,7 +1572,7 @@ def create_custom_model(segmentation_model=None, segmentation_transform=None):
     )  # adding tokenizer in line with "self.prompt_learner" definiton
 
 
-def image_augmentation(mode="rotate_illumination", base_preprocess=None):
+def image_augmentation(mode, base_preprocess):
     if mode == "rotate_illumination":
         return torchvision.transforms.Compose([
             torchvision.transforms.RandomRotation(degrees=30),
@@ -1599,7 +1599,7 @@ def image_augmentation(mode="rotate_illumination", base_preprocess=None):
             base_preprocess
         ])
     else:
-        raise ValueError(f"Unknown augmentation mode: {mode}")
+        return base_preprocess
 
 
 # Define optimizer and LR scheduler.
@@ -1849,7 +1849,7 @@ def train_cocoop():
     base_model = base_model.to(DEVICE)
     custom_model = custom_model.to(DEVICE)
 
-    augmentation_mode = CFG.get("augmentation_mode", "rotate_illumination")  # Default fallback
+    augmentation_mode = CFG.get("augmentation_mode", None)
     train_transform = image_augmentation(
         mode=augmentation_mode, 
         base_preprocess=base_preprocess
