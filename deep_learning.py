@@ -1030,6 +1030,11 @@ def train_loop(
             LOGGER.warning(f"Final loss has shape {loss.shape} - converting to mean")
             loss = loss.mean()
 
+        # TODO: (NEW) checks right before backprop whether loss.requires_grad is False. if so, it detaches and re-clones loss as a leaf tensor with requires_grad=True, so that .backward() will succeed
+        if isinstance(loss, torch.Tensor) and not loss.requires_grad:
+            LOGGER.warning("Final loss does not require gradients — forcing requires_grad_(True)")
+            loss = loss.detach().clone().requires_grad_(True)
+
         # Backward pass and optimize
         loss.backward()
         optimizer.step()
@@ -2074,6 +2079,7 @@ def train_cocoop():
     # Return best results
     return final_base_acc, final_novel_acc, final_hm
 
+val_acc = 0.0
 
 def main():
     try:
