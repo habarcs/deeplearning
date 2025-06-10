@@ -89,7 +89,8 @@ CFG = {
         "ema": {
             "enabled": False,
             "decay": 0.999,
-        }
+        },
+        "evaluate_zero_shot": False,
     },
     "helip": {
         "enabled": False,
@@ -1030,11 +1031,6 @@ def train_loop(
             LOGGER.warning(f"Final loss has shape {loss.shape} - converting to mean")
             loss = loss.mean()
 
-        # TODO: (NEW) checks right before backprop whether loss.requires_grad is False. if so, it detaches and re-clones loss as a leaf tensor with requires_grad=True, so that .backward() will succeed
-        if isinstance(loss, torch.Tensor) and not loss.requires_grad:
-            LOGGER.warning("Final loss does not require gradients — forcing requires_grad_(True)")
-            loss = loss.detach().clone().requires_grad_(True)
-
         # Backward pass and optimize
         loss.backward()
         optimizer.step()
@@ -1566,8 +1562,6 @@ def create_segmentation_model():
 
 def create_custom_model(segmentation_model=None, segmentation_transform=None):
     base_model, preprocess, tokenizer = create_base_model()
-    for param in base_model.parameters():
-        param.requires_grad = False
     model = CustomCLIP(CLASS_NAMES, base_model, tokenizer, segmentation_model, segmentation_transform)
     return (
         base_model,
@@ -1907,7 +1901,7 @@ def train_cocoop():
 
     # Create optimizer and scheduler
     LOGGER.info("Setting up optimizer and scheduler...")
-    optimizer, scheduler = get_optimizer_and_scheduler(custom_model)
+    optimizer, scheduler = get_optimizer_and_scheduler(custom_model.prompt_learner)
 
     # Initialize HELIP if enabled
     hard_pair_miner = None
@@ -1939,6 +1933,7 @@ def train_cocoop():
     start_epoch = 0
     best_accuracy = 0.0
     patience_counter = 0
+    val_acc = 0.0
 
     # Check for resume training
     checkpoint_path = os.path.join(CFG["training"]["checkpoint_dir"], "model_best.pth")
@@ -1949,20 +1944,21 @@ def train_cocoop():
         )
         start_epoch += 1  # Start from the next epoch
 
-    # Evaluate zero-shot performance of the base model (as a baseline, before any training)
-    LOGGER.info("Evaluating zero-shot performance of base model...")
-    base_zero_shot_acc, novel_zero_shot_acc, zero_shot_hm = eval_with_both_categories(
-        custom_model=custom_model,
-        test_base_loader=test_base_loader,
-        test_novel_loader=test_novel_loader,
-        epoch=0,
-    )
+    if CFG["validation"]["evaluate_zero_shot"]:
+        # Evaluate zero-shot performance of the base model (as a baseline, before any training)
+        LOGGER.info("Evaluating zero-shot performance of base model...")
+        base_zero_shot_acc, novel_zero_shot_acc, zero_shot_hm = eval_with_both_categories(
+            custom_model=custom_model,
+            test_base_loader=test_base_loader,
+            test_novel_loader=test_novel_loader,
+            epoch=0,
+        )
 
-    LOGGER.info(
-        f"Zero-shot: Base Acc={base_zero_shot_acc:.4f}, "
-        f"Novel Acc={novel_zero_shot_acc:.4f}, "
-        f"HM={zero_shot_hm:.4f}"
-    )
+        LOGGER.info(
+            f"Zero-shot: Base Acc={base_zero_shot_acc:.4f}, "
+            f"Novel Acc={novel_zero_shot_acc:.4f}, "
+            f"HM={zero_shot_hm:.4f}"
+        )
 
     # Training loop
     LOGGER.info("Starting training...")
@@ -2061,12 +2057,25 @@ def train_cocoop():
         test_novel_loader=test_novel_loader,
         epoch=CFG["training"]["epochs"] + 1,
     )
-
     LOGGER.info(
         f"Final: Base Acc={final_base_acc:.4f}, "
         f"Novel Acc={final_novel_acc:.4f}, "
         f"HM={final_hm:.4f}"
     )
+    if avg_model:
+        LOGGER.info("Evaluating with EMA model")
+        ema_base_acc, ema_novel_acc, ema_hm = eval_with_both_categories(
+            custom_model=avg_model,
+            test_base_loader=test_base_loader,
+            test_novel_loader=test_novel_loader,
+            epoch=CFG["training"]["epochs"] + 1,
+        )
+        LOGGER.info(
+            f"EMA: Base Acc={ema_base_acc:.4f}, "
+            f"EMA: Novel Acc={ema_novel_acc:.4f}, "
+            f"EMA: HM={ema_hm:.4f}"
+        )
+
 
     # Log improvement over zero-shot
     LOGGER.info(
