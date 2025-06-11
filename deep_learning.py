@@ -43,7 +43,7 @@ CFG = {
             "weights": "laion2b_s34b_b79k",
         },
         "prompt_learner": {
-            "n_ctx": 16,  # Reduced from 16 to save memory
+            "n_ctx": 4,  # Reduced from 16 to save memory
             "ctx_init": "",
         },
         "text_encoder": {},
@@ -62,9 +62,9 @@ CFG = {
     "training": {
         "resume_id": None,
         "resume_from": "best",
-        "batch_size": 128,  # 32 is the default batch size for the ViT-B-32 model but it was crashing my local machine
-        "epochs": 50,  # TODO: More
-        "warmup_epochs": 1,  # Possibly we'll need more
+        "batch_size": 32, 
+        "epochs": 50,  
+        "warmup_epochs": 1, # TODO: More once model works  
         "patience": 5,
         "checkpoint_dir": "./checkpoints",
         "optimizer": {
