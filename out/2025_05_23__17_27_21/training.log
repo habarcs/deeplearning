@@ -1,6 +1,0 @@
-2025-05-23 17:27:26,687 - cocoop_training - INFO - Using cuda device
-2025-05-23 17:27:26,688 - root - INFO - Loaded ViT-B-32 model config.
-2025-05-23 17:27:28,683 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
-2025-05-23 17:27:28,924 - root - INFO - Loaded ViT-B-32 model config.
-2025-05-23 17:27:29,903 - root - INFO - Loading pretrained ViT-B-32 weights (laion2b_s34b_b79k).
-2025-05-23 17:27:30,086 - cocoop_training - INFO - Initialized PromptSRC ensemble with window_size=5, sigma=2.0
