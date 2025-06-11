@@ -1283,9 +1283,7 @@ class PromptLearner(torch.nn.Module):
 
         # Start PromptSRC
         # Initialize prompt ensemble if enabled
-        self.prompt_ensemble_enabled = (
-            CFG.get("promptsrc", {}).get("prompt_ensemble", {}).get("enabled", False)
-        )
+        self.prompt_ensemble_enabled = CFG["promptsrc"]["enabled"] and CFG["promptsrc"]["prompt_ensemble"]["enabled"]
         if self.prompt_ensemble_enabled:
             window_size = CFG["promptsrc"]["prompt_ensemble"]["window_size"]
             sigma = CFG["promptsrc"]["prompt_ensemble"]["sigma"]
@@ -1309,9 +1307,6 @@ class PromptLearner(torch.nn.Module):
             ctx_vectors = torch.empty(n_ctx, ctx_dim, device=DEVICE)
             torch.nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
-
-        print(f'Initial context: "{prompt_prefix}"')
-        print(f"Number of context words (tokens): {n_ctx}")
 
         self.ctx = torch.nn.Parameter(ctx_vectors)
 
@@ -2088,7 +2083,6 @@ def train_cocoop():
     # Return best results
     return final_base_acc, final_novel_acc, final_hm
 
-val_acc = 0.0
 
 def main():
     try:
