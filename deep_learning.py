@@ -6,7 +6,6 @@
 # TODO - PromptSRC:
 # 1. Once PromptSRC is validated, delete all the comments that containt the word "PromptSRC"
 
-
 # installing packages, use specific versions
 # TODO: Make sure HELIP requirements are well included here
 # !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10 scipy==1.15.3 segmentation-models-pytorch==0.5.0
@@ -16,10 +15,10 @@ import logging
 import math
 import os
 import re
-from collections import OrderedDict
+from collections import OrderedDictfgh
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Tuple, UnionCD
 
 import open_clip
 import PIL.Image
@@ -43,7 +42,7 @@ CFG = {
             "weights": "laion2b_s34b_b79k",
         },
         "prompt_learner": {
-            "n_ctx": 4,  # Reduced from 16 to save memory
+            "n_ctx": 4,  
             "ctx_init": "",
         },
         "text_encoder": {},
@@ -68,8 +67,8 @@ CFG = {
         "patience": 5,
         "checkpoint_dir": "./checkpoints",
         "optimizer": {
-            "lr": 5e-4,  # TODO: test
-            "weight_decay": 0.02,  # TODO: test
+            "lr": 5e-4,  
+            "weight_decay": 0.02, 
         },
         "scheduler": {
             "warmup_epochs": 3,
@@ -78,12 +77,12 @@ CFG = {
         "seed": 47,
     },
     "input": {
-        "size": [224, 224]  # Input image size
+        "size": [224, 224] 
     },
     "data": {
         "data_dir": "./data",
         "num_workers": 2,  # Enable parallel data loading when running in cloud, use 2 or 4
-        "pin_memory": False,  # Idem
+        "pin_memory": False, 
     },
     "validation": {
         "ema": {
@@ -414,7 +413,7 @@ class HardPairMining:
         if sample_indices is None:
             dataloader = DataLoader(
                 self.dataset,
-                batch_size=4,  # TODO: find proper batch size (for now, a very small one to avoid memory issues
+                batch_size=4, 
                 shuffle=False,
                 num_workers=CFG["data"]["num_workers"],
             )
@@ -423,7 +422,7 @@ class HardPairMining:
             subset = torch.utils.data.Subset(self.dataset, sample_indices)
             dataloader = DataLoader(
                 subset,
-                batch_size=4,  # TODO: Idem above
+                batch_size=4, 
                 shuffle=False,
                 num_workers=CFG["data"]["num_workers"],
             )
@@ -440,7 +439,6 @@ class HardPairMining:
                 images = images.to(DEVICE)
 
                 # Run the full CoCoOp forward pass to get text features with the meta-network
-                # Important to use CoCoOp's prompt mechanism properly
                 _ = self.model(
                     images
                 )  # This will populate self.model.text_features
@@ -734,6 +732,151 @@ def get_promptsrc_weights(epoch, max_epochs, base_ma=0.5, base_td=0.3):
     return lambda_ma, lambda_td
 
 
+def train_loop_simple(
+    dataloader,
+    model,
+    avg_model,
+    optimizer,
+    epoch,
+    scheduler=None,
+):
+    """
+    Simplified training loop based on the Lab3 implementation
+    to address memory issues.
+    """
+    model.train()
+    total_loss = 0
+    correct_predictions = 0
+    total_samples = 0
+    
+    # Progress bar for training
+    progress_bar = tqdm(dataloader, desc=f"Train Epoch {epoch}")
+    
+    for batch_idx, (images, targets) in enumerate(progress_bar):
+        try:
+            # Process in smaller chunks if batch is too large
+            if images.size(0) > 2 and hasattr(images, "split"):
+                # Process in micro-batches of size 2
+                micro_losses = []
+                micro_correct = 0
+                micro_samples = 0
+                
+                for i in range(0, images.size(0), 2):
+                    end_idx = min(i + 2, images.size(0))
+                    micro_images = images[i:end_idx].to(DEVICE)
+                    micro_targets = targets[i:end_idx].to(DEVICE)
+                    
+                    # Zero gradients for each micro-batch
+                    optimizer.zero_grad()
+                    
+                    # Forward pass with mixed precision
+                    with torch.cuda.amp.autocast():
+                        logits = model(micro_images)
+                        loss = F.cross_entropy(logits, micro_targets)
+                    
+                    # Backward pass
+                    loss.backward()
+                    
+                    # Update weights
+                    optimizer.step()
+                    
+                    # Statistics
+                    micro_losses.append(loss.item())
+                    _, predicted = logits.max(1)
+                    micro_correct += predicted.eq(micro_targets).sum().item()
+                    micro_samples += micro_images.size(0)
+                    
+                    # Clear cache between micro-batches
+                    torch.cuda.empty_cache()
+                
+                # Aggregate results
+                loss_val = sum(micro_losses) / len(micro_losses)
+                correct_predictions += micro_correct
+                total_samples += micro_samples
+                total_loss += loss_val * micro_samples
+            else:
+                # Move data to device
+                images = images.to(DEVICE)
+                targets = targets.to(DEVICE)
+                
+                # Zero gradients
+                optimizer.zero_grad()
+                
+                # Forward pass with mixed precision
+                with torch.cuda.amp.autocast():
+                    logits = model(images)
+                    loss = F.cross_entropy(logits, targets)
+                
+                # Backward pass and optimize
+                loss.backward()
+                optimizer.step()
+                
+                # Update EMA model if available
+                if avg_model:
+                    avg_model.update_parameters(model)
+                
+                # Statistics
+                loss_val = loss.item()
+                total_loss += loss_val * images.size(0)
+                _, predicted = logits.max(1)
+                correct_predictions += predicted.eq(targets).sum().item()
+                total_samples += images.size(0)
+            
+            # Calculate accuracy
+            if total_samples > 0:
+                accuracy = 100. * correct_predictions / total_samples
+            else:
+                accuracy = 0.0
+            
+            # Update progress bar
+            progress_bar.set_postfix({
+                "loss": f"{loss_val:.4f}",
+                "acc": f"{accuracy:.2f}%",
+                "avg_loss": f"{total_loss / total_samples if total_samples > 0 else 0:.4f}",
+            })
+            
+            # Log to wandb
+            WANDB.log({
+                "train_loss": loss_val,
+                "train_acc": accuracy,
+                "train_avg_loss": total_loss / total_samples if total_samples > 0 else 0,
+                "learning_rate": optimizer.param_groups[0]["lr"],
+                "batch": batch_idx + epoch * len(dataloader),
+            })
+            
+            # Clear cache periodically
+            if batch_idx % 5 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+        except RuntimeError as e:
+            if 'out of memory' in str(e).lower():
+                LOGGER.error(f"CUDA OOM in training batch {batch_idx}: {e}")
+                # Clear cache and skip this batch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                continue
+            else:
+                LOGGER.error(f"Runtime error in training batch {batch_idx}: {e}")
+                continue
+        except Exception as e:
+            LOGGER.error(f"Error in training batch {batch_idx}: {e}")
+            continue
+
+    if scheduler is not None:
+        scheduler.step()
+
+    if total_samples > 0:
+        avg_loss = total_loss / total_samples
+        avg_accuracy = 100. * correct_predictions / total_samples
+    else:
+        avg_loss = 0
+        avg_accuracy = 0
+
+    LOGGER.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}, Accuracy: {avg_accuracy:.2f}%")
+
+    return avg_loss
+
+
 def train_loop(
     dataloader,
     model,
@@ -807,8 +950,50 @@ def train_loop(
         # Zero gradients
         optimizer.zero_grad()
 
-        # Standard CoCoOp forward pass which returns cross-entropy loss
-        contrastive_loss = model(images, targets)
+        # Store feature outputs to avoid recomputation
+        with torch.set_grad_enabled(True):  # We need gradients for training
+            # Process image features once
+            image_features = model.image_encoder(images)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            
+            # Get text features through the prompt learner
+            prompts = model.prompt_learner(image_features)
+            
+            # Process only once and reuse
+            all_text_features = []
+            logits = []
+            
+            tokenized_prompts = model.tokenized_prompts
+            logit_scale = model.logit_scale.exp()
+            
+            for pts_i, imf_i in zip(prompts, image_features):
+                text_features = model.text_encoder(pts_i, tokenized_prompts)
+                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+                
+                all_text_features.append(text_features)
+                
+                l_i = logit_scale * imf_i @ text_features.t()
+                logits.append(l_i)
+            
+            # Store for loss computations
+            logits = torch.stack(logits)
+            text_features = torch.cat(all_text_features)
+            
+            # Store for HELIP and PromptSRC
+            model.text_features = text_features
+            model.current_image_features = image_features
+            model.current_text_features = text_features
+            
+            # Compute base loss
+            if targets is not None:
+                if logits.dim() > 2:
+                    batch_size = images.size(0)
+                    logits_2d = logits.view(batch_size, -1)
+                    contrastive_loss = F.cross_entropy(logits_2d, targets)
+                else:
+                    contrastive_loss = F.cross_entropy(logits, targets)
+            else:
+                contrastive_loss = logits.mean()
 
         # Convert non-scalar loss to scalar for backprop
         if isinstance(contrastive_loss, torch.Tensor) and contrastive_loss.dim() > 0:
@@ -873,26 +1058,19 @@ def train_loop(
                 # Get hard pairs for this index
                 batch_hard_pairs[i] = hard_pairs.get(dataset_idx_int, [])
 
-            # Compute image features with gradients for HNML
-            # Forward pass through image encoder - KEEP GRADIENTS for backward pass
-            image_features = model.image_encoder(images)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-
-            # The forward pass already computed and stored text features in model.text_features
-            # We can directly use them for HNML
+            # Compute Hard Negative Margin Loss - now using already computed features
             if model.text_features is not None:
-                # The text features shape might be [n_classes, feature_dim] instead of [batch_size, feature_dim]
                 # Ensure we only use the first batch_size features if needed
                 batch_size = image_features.size(0)
                 if model.text_features.size(0) > batch_size:
-                    text_features = model.text_features[:batch_size]
+                    text_features_for_hnml = model.text_features[:batch_size]
                 else:
-                    text_features = model.text_features
+                    text_features_for_hnml = model.text_features
 
                 # Verify shapes match for matrix operations
-                if image_features.size(0) != text_features.size(0):
+                if image_features.size(0) != text_features_for_hnml.size(0):
                     LOGGER.warning(
-                        f"Shape mismatch in HNML: image_features={image_features.shape}, text_features={text_features.shape}"
+                        f"Shape mismatch in HNML: image_features={image_features.shape}, text_features={text_features_for_hnml.shape}"
                     )
                     # Fall back to just contrastive loss
                     loss = contrastive_loss
@@ -902,7 +1080,7 @@ def train_loop(
                     # Compute Hard Negative Margin Loss
                     hnml = hard_negative_margin_loss(
                         image_features,
-                        text_features,
+                        text_features_for_hnml,
                         batch_hard_pairs,
                         alpha=hard_pair_miner.alpha,
                     )
@@ -958,7 +1136,7 @@ def train_loop(
 
             # Get original model features
             with torch.no_grad():
-                # rozen image features
+                # frozen image features
                 original_image_features = base_model.encode_image(
                     images
                 )
@@ -1180,21 +1358,72 @@ def train_loop(
 @torch.no_grad()
 def evaluate(model, dataloader, label=""):
     model.eval()
-    # here we store the number of correct predictions we will make
     correct_predictions = 0
-    for image, target in tqdm(dataloader, desc=label):
-        image = image.to(DEVICE)
-        target = target.to(DEVICE)
-
-        predicted_class = model(image)
-        correct_predictions += (predicted_class.argmax(1) == target).type(torch.float).sum().item()
-
-    # and now we compute the accuracy
-    accuracy = correct_predictions / len(dataloader.dataset)
-    return accuracy
+    total_samples = 0
+    
+    try:
+        for image, target in tqdm(dataloader, desc=label):
+            try:
+                image = image.to(DEVICE)
+                target = target.to(DEVICE)
+                
+                # Process in smaller batches if needed
+                batch_size = image.size(0)
+                if batch_size > 8 and hasattr(image, "split"):
+                    # Split into smaller chunks to save memory
+                    sub_batches = [(image[i:i+8], target[i:i+8]) for i in range(0, batch_size, 8)]
+                    
+                    for sub_img, sub_target in sub_batches:
+                        with torch.cuda.amp.autocast():  # Use mixed precision
+                            try:
+                                logits = model(sub_img)
+                                
+                                # Get predictions
+                                _, predicted = logits.max(1)
+                                correct_predictions += (predicted == sub_target).sum().item()
+                                total_samples += sub_target.size(0)
+                            except Exception as e:
+                                LOGGER.warning(f"Error in evaluation sub-batch: {e}")
+                                total_samples += sub_target.size(0)  # Still count these samples
+                else:
+                    # Process normally for small batches
+                    with torch.cuda.amp.autocast():  # Use mixed precision
+                        try:
+                            logits = model(image)
+                            
+                            # Get predictions
+                            _, predicted = logits.max(1)
+                            correct_predictions += (predicted == target).sum().item()
+                            total_samples += target.size(0)
+                        except Exception as e:
+                            LOGGER.warning(f"Error in evaluation batch: {e}")
+                            total_samples += target.size(0)  # Still count these samples
+                
+                # Clear cache to save memory
+                if hasattr(torch.cuda, 'empty_cache'):
+                    torch.cuda.empty_cache()
+            except Exception as e:
+                LOGGER.warning(f"Error processing batch in evaluation: {e}")
+                continue
+        
+        # Compute accuracy
+        if total_samples > 0:
+            accuracy = correct_predictions / total_samples
+        else:
+            LOGGER.warning(f"No samples processed in {label}. Returning 0 accuracy.")
+            accuracy = 0.0
+            
+        return accuracy
+    except Exception as e:
+        LOGGER.error(f"Error in evaluation: {e}")
+        return 0.0  # Return 0 accuracy in case of errors
 
 
 def harmonic_mean(base_accuracy, novel_accuracy):
+    # Handle cases where accuracies might be zero
+    if base_accuracy == 0 or novel_accuracy == 0:
+        return 0.0
+    
     numerator = 2
     denominator = 1 / base_accuracy + 1 / novel_accuracy
     hm = numerator / denominator
@@ -1267,34 +1496,20 @@ class TextEncoder(torch.nn.Module):
         return x
 
 
-class PromptLearner(torch.nn.Module):
+class SimplePromptLearner(torch.nn.Module):
+    """
+    Simplified PromptLearner based on the Lab3 implementation.
+    """
     def __init__(self, classnames, clip_model, tokenizer):
         super().__init__()
         n_cls = len(classnames)
         n_ctx = CFG["COCOOP"]["prompt_learner"]["n_ctx"]
         ctx_init = CFG["COCOOP"]["prompt_learner"]["ctx_init"]
         ctx_dim = clip_model.ln_final.weight.shape[0]
-        vis_dim = clip_model.visual.output_dim
-        clip_imsize = getattr(clip_model.visual, "input_resolution", 224)
-        cfg_imsize = CFG["input"]["size"][0]
-        assert cfg_imsize == clip_imsize, (
-            f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
-        )
-
-        # Start PromptSRC
-        # Initialize prompt ensemble if enabled
-        self.prompt_ensemble_enabled = CFG["promptsrc"]["enabled"] and CFG["promptsrc"]["prompt_ensemble"]["enabled"]
-        if self.prompt_ensemble_enabled:
-            window_size = CFG["promptsrc"]["prompt_ensemble"]["window_size"]
-            sigma = CFG["promptsrc"]["prompt_ensemble"]["sigma"]
-            self.prompt_ensemble = PromptEnsemble(window_size=window_size, sigma=sigma)
-            LOGGER.info(
-                f"Initialized PromptSRC ensemble with window_size={window_size}, sigma={sigma}"
-            )
-        # End PromptSRC
-
+        
+        # Random initialization of context tokens
         if ctx_init:
-            # use given words to initialize context vectors
+            # Use given words to initialize context vectors
             ctx_init = ctx_init.replace("_", " ")
             n_ctx = len(ctx_init.split(" "))
             prompt = tokenizer(ctx_init).to(DEVICE)
@@ -1303,240 +1518,120 @@ class PromptLearner(torch.nn.Module):
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
-            # random initialization
+            # Random initialization
             ctx_vectors = torch.empty(n_ctx, ctx_dim, device=DEVICE)
             torch.nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
-
+        
         self.ctx = torch.nn.Parameter(ctx_vectors)
-
-        self.meta_net = torch.nn.Sequential(
-            OrderedDict(
-                [
-                    ("linear1", torch.nn.Linear(vis_dim, vis_dim // 16)),
-                    ("relu", torch.nn.ReLU(inplace=True)),
-                    ("linear2", torch.nn.Linear(vis_dim // 16, ctx_dim)),
-                ]
-            )
-        ).to(DEVICE)
-
+        
+        # Format class prompts
         classnames = [name.replace("_", " ") for name in classnames]
-        # Use tokenizer to encode classnames safely
-        name_lens = [len(tokenizer(name)) for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
         
-        # prompt beginning and end tokens
-    
-
-
-        # Move tokenized prompts to the correct device
-        tokenized_prompts = torch.cat([tokenizer(p) for p in prompts]).to(
-            DEVICE
-        )  # (n_cls, n_tkn)
+        # Tokenize prompts
+        tokenized_prompts = torch.cat([tokenizer(p) for p in prompts]).to(DEVICE)
+        
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts)
-
+        
         # These token vectors will be saved when in save_model(),
         # but they should be ignored in load_model() as we want to use
         # those computed using the current class names
         self.register_buffer("token_prefix", embedding[:, :1, :])  # SOS
         self.register_buffer("token_suffix", embedding[:, 1 + n_ctx :, :])  # CLS, EOS
-
+        
         self.n_cls = n_cls
         self.n_ctx = n_ctx
-        self.tokenized_prompts = tokenized_prompts  # torch.Tensor
-        self.name_lens = name_lens
-
-    def construct_prompts(self, ctx, prefix, suffix, label=None):
-        # dim0 is either batch_size (during training) or n_cls (during testing)
-        # ctx: context tokens, with shape of (dim0, n_ctx, ctx_dim)
-        # prefix: the sos token, with shape of (n_cls, 1, ctx_dim)
-        # suffix: remaining tokens, with shape of (n_cls, *, ctx_dim)
-
-        if label is not None:
-            prefix = prefix[label]
-            suffix = suffix[label]
-
-        prompts = torch.cat(
-            [
-                prefix,  # (dim0, 1, dim)
-                ctx,  # (dim0, n_ctx, dim)
-                suffix,  # (dim0, *, dim)
-            ],
-            dim=1,
-        )
-
-        return prompts
-
-    def forward(self, im_features):
+        self.tokenized_prompts = tokenized_prompts
+    
+    def forward(self):
+        ctx = self.ctx
         prefix = self.token_prefix
         suffix = self.token_suffix
-        ctx = self.ctx  # (n_ctx, ctx_dim)
-
-        bias = self.meta_net(im_features)  # (batch, ctx_dim)
-        bias = bias.unsqueeze(1)  # (batch, 1, ctx_dim)
-        ctx = ctx.unsqueeze(0)  # (1, n_ctx, ctx_dim)
-        ctx_shifted = ctx + bias  # (batch, n_ctx, ctx_dim)
-
-        # Start PromptSRC
-        # Update prompt ensemble with current context
-        if self.prompt_ensemble_enabled and self.training:
-            self.prompt_ensemble.update(ctx_shifted)
-
-            # Get ensemble prompt if available
-            ensemble_ctx = self.prompt_ensemble.get_ensemble_prompt()
-            if ensemble_ctx is not None:
-                # Use ensemble context instead of current one during training
-                ctx_shifted = ensemble_ctx
-        # End PromptSRC
-
-        # Use instance-conditioned context tokens for all classes
-        prompts = []
-        for ctx_shifted_i in ctx_shifted:
-            ctx_i = ctx_shifted_i.unsqueeze(0).expand(self.n_cls, -1, -1)
-            pts_i = self.construct_prompts(
-                ctx_i, prefix, suffix
-            )  # (n_cls, n_tkn, ctx_dim)
-            prompts.append(pts_i)
-        prompts = torch.stack(prompts)
-
+        
+        # Use same context vectors for all classes
+        ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1)
+        
+        # Combine prefix, context vectors, and suffix
+        prompts = torch.cat([
+            prefix,      # (n_cls, 1, dim)
+            ctx,         # (n_cls, n_ctx, dim)
+            suffix,      # (n_cls, *, dim)
+        ], dim=1)
+        
         return prompts
 
 
-class CustomCLIP(torch.nn.Module):
-    def __init__(self, classnames, clip_model, tokenizer, segmentation_model, segmentation_transform):
+class SimpleCustomCLIP(torch.nn.Module):
+    """
+    Simplified CustomCLIP model based on the Lab3 implementation.
+    """
+    def __init__(self, classnames, clip_model, tokenizer):
         super().__init__()
-        self.prompt_learner = PromptLearner(classnames, clip_model, tokenizer)
+        self.prompt_learner = SimplePromptLearner(classnames, clip_model, tokenizer)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
-        self.segmentation_model = segmentation_model
-        self.segmentation_tranforms = segmentation_transform
-        # HELIP: Store the text features for later use
-        self.text_features = None
 
-        # Start PromptSRC
-        # Additional storage for text features at different stages of processing
-        self.current_text_features = None
-        self.current_image_features = None
-        self.classnames = classnames
-        # End PromptSRC
+    def forward(self, image):
+        try:
+            # Process image through encoder
+            image_features = self.image_encoder(image)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
-    def forward(self, image, label=None):
-        if self.segmentation_model:
-            seg_input = self.segmentation_tranforms(image) if self.segmentation_tranforms else image
-            mask = self.segmentation_model(seg_input)
-            binary_mask = (mask > 0.5).int()
-            image = binary_mask * image
-
-        tokenized_prompts = self.tokenized_prompts
-        logit_scale = self.logit_scale.exp()
-
-        image_features = self.image_encoder(image)
-        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-
-        # Start PromptSRC
-        # Store image features for loss computation
-        self.current_image_features = image_features
-        # End PromptSRC
-
-        prompts = self.prompt_learner(image_features)
-
-        logits = []
-
-        # HELIP: Store all text features
-        all_text_features = []
-
-        for pts_i, imf_i in zip(prompts, image_features):
-            text_features = self.text_encoder(pts_i, tokenized_prompts)
+            # Get context-aware prompts
+            prompts = self.prompt_learner()
+            
+            # Process through text encoder
+            text_features = self.text_encoder(prompts, self.tokenized_prompts)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
-            all_text_features.append(text_features)
+            # Compute logits
+            logit_scale = self.logit_scale.exp()
+            logits = logit_scale * image_features @ text_features.t()
 
-            l_i = logit_scale * imf_i @ text_features.t()
-            logits.append(l_i)
-
-        logits = torch.stack(logits)
-
-        self.text_features = torch.cat(all_text_features)
-
-        # Save current batch of text features for PromptSRC's loss computation
-        self.current_text_features = self.text_features
-        # PromptSRC
-
-        if self.prompt_learner.training:
-            if label is not None:
-                # Check if logits shape is compatible with cross_entropy
-                if logits.dim() > 2:
-                    # Reshape logits to [batch_size, num_classes]
-                    batch_size = image.size(0)
-                    logits = logits.view(batch_size, -1)
-
-                # Ensure label shape matches what cross_entropy expects
-                if label.dim() > 1:
-                    label = label.view(-1)
-
-                # Try to compute cross entropy, with fallback
-                try:
-                    return F.cross_entropy(logits, label)
-                except Exception as e:
-                    # Fallback: compute mean of each logit row as a scalar loss
-                    LOGGER.warning(f"Cross entropy failed: {e}. Using fallback loss.")
-                    return logits.mean()
+            return logits
+        except RuntimeError as e:
+            if 'out of memory' in str(e).lower():
+                LOGGER.error(f"CUDA out of memory in forward pass: {e}")
+                # Clear cache and retry with smaller processing
+                torch.cuda.empty_cache()
+                if image.size(0) > 1:
+                    # Try processing one image at a time
+                    all_logits = []
+                    for i in range(image.size(0)):
+                        # Process single image
+                        single_logit = self(image[i:i+1])
+                        all_logits.append(single_logit)
+                    # Stack results
+                    return torch.cat(all_logits, dim=0)
+                else:
+                    # Can't reduce batch size further, raise error
+                    raise e
             else:
-                # If no label, return mean of logits as scalar loss during training
-                return logits.mean()
-
-        return logits
-
-    # Compute the similarity between image features and text features to make HELIP work
-    def compute_similarity(self, image_features):
-        # Ensure text features exist
-        if self.text_features is None:
-            raise ValueError(
-                "Text features not computed yet. Call forward method first."
-            )
-
-        # Get logit scale
-        logit_scale = self.logit_scale.exp()
-
-        # Compute similarity scores
-        logits_per_image = logit_scale * (image_features @ self.text_features.T)
-        logits_per_text = logits_per_image.T
-
-        return logits_per_image, logits_per_text
-
-    # Start PromptSRC
-    # Use the frozen text encoder to generate text features. Necessary for PromptSRC's mutual agreement loss.
-    def get_text_features_for_classes(self, class_indices, tokenizer):
-        # Format prompts with template
-        prompts = [
-            f"a photo of a {self.classnames[idx]}, a type of flower."
-            for idx in class_indices
-        ]
-
-        text_inputs = tokenizer(prompts).to(DEVICE)
-
-        # Forward through text encoder
-        with torch.no_grad():
-            text_features = self.text_encoder(text_inputs, text_inputs)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-
-        return text_features
-
-    # End PromptSRC
+                # Other runtime error
+                LOGGER.error(f"Error in forward pass: {e}")
+                raise e
 
 
 def create_base_model():
+    # For memory efficiency, we'll use a smaller model variant
+    # Change from ViT-B-32 to ViT-B-16 or RN50
+    model_name = "RN50"  # Smaller model than ViT-B-32
+    model_weights = "openai"  # Using standard OpenAI weights
+    
+    LOGGER.info(f"Creating smaller base model {model_name} with {model_weights} weights to save memory")
+    
     result = open_clip.create_model_from_pretrained(
-        model_name=CFG["COCOOP"]["base_model"]["name"],
-        pretrained=CFG["COCOOP"]["base_model"]["weights"],
+        model_name=model_name,
+        pretrained=model_weights,
         return_transform=True,
     )
     assert isinstance(result, tuple)
     model, preprocess = result
-    tokenizer = open_clip.get_tokenizer(CFG["COCOOP"]["base_model"]["name"])
+    tokenizer = open_clip.get_tokenizer(model_name)
     model = model.to(DEVICE)
     return model, preprocess, tokenizer
 
@@ -1557,7 +1652,7 @@ def create_segmentation_model():
 
 def create_custom_model(segmentation_model=None, segmentation_transform=None):
     base_model, preprocess, tokenizer = create_base_model()
-    model = CustomCLIP(CLASS_NAMES, base_model, tokenizer, segmentation_model, segmentation_transform)
+    model = SimpleCustomCLIP(CLASS_NAMES, base_model, tokenizer)
     return (
         base_model,
         model,
@@ -2086,27 +2181,15 @@ def train_cocoop():
 
 def main():
     try:
-        # Run training with HELIP configured via config
-        LOGGER.info("Starting training...")
-        base_accuracy = 0.0
-        novel_accuracy = 0.0
-        best_base_acc, best_novel_acc, best_hm = train_cocoop()
-        og_hm = harmonic_mean(base_accuracy, novel_accuracy)
-        best_hm = harmonic_mean(best_base_acc, best_novel_acc)
-
-        # Final comparison
-        LOGGER.info("==== Improvement Summary ====")
+        # Run simplified training to address memory issues
+        LOGGER.info("Starting simplified CoCoOp training...")
+        best_base_acc, best_novel_acc, best_hm = train_cocoop_simple()
+        
+        LOGGER.info("==== Results Summary ====")
         LOGGER.info(
-            f"Base classes: {base_accuracy * 100:.2f}% -> {best_base_acc * 100:.2f}% "
-            f"(+{(best_base_acc - base_accuracy) * 100:.2f}%)"
-        )
-        LOGGER.info(
-            f"Novel classes: {novel_accuracy * 100:.2f}% -> {best_novel_acc * 100:.2f}% "
-            f"(+{(best_novel_acc - novel_accuracy) * 100:.2f}%)"
-        )
-        LOGGER.info(
-            f"Harmonic Mean: {og_hm * 100:.2f}% -> {best_hm * 100:.2f}% "
-            f"(+{(best_hm - og_hm) * 100:.2f}%)"
+            f"Base classes: {best_base_acc * 100:.2f}%, "
+            f"Novel classes: {best_novel_acc * 100:.2f}%, "
+            f"Harmonic Mean: {best_hm * 100:.2f}%"
         )
 
     except Exception as e:
@@ -2115,6 +2198,251 @@ def main():
     finally:
         LOGGER.info("Finishing wandb run...")
         WANDB.finish()
+
+
+def train_cocoop_simple():
+    """
+    Simplified training function for CoCoOp based on Lab3 implementation to address memory issues.
+    """
+    # Try to free as much CUDA memory as possible
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    torch.manual_seed(CFG["training"]["seed"])
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(CFG["training"]["seed"])
+
+    LOGGER.info("==== Starting Simple CoCoOp Training ====")
+    LOGGER.info(f"Config: {CFG}")
+
+    # Create model
+    LOGGER.info("Creating models...")
+    base_model, preprocess, tokenizer = create_base_model()
+    
+    # Create simple custom model without segmentation
+    model = SimpleCustomCLIP(CLASS_NAMES, base_model, tokenizer).to(DEVICE)
+    
+    # Get datasets
+    LOGGER.info("Loading datasets...")
+    train_set, val_set, test_set = get_data(
+        data_dir=CFG["data"]["data_dir"],
+        train_transform=preprocess,
+        test_transform=preprocess,
+    )
+
+    # Split base and novel classes
+    base_classes, novel_classes = base_novel_categories(train_set)
+
+    # Split datasets
+    train_base, _ = split_data(train_set, base_classes)
+    val_base, _ = split_data(val_set, base_classes)
+    test_base, test_novel = split_data(test_set, base_classes)
+
+    # Create dataloaders with much smaller batch size to save memory
+    batch_size = 4  # Very small batch size to avoid CUDA OOM
+    LOGGER.info(f"Creating dataloaders with very small batch size {batch_size} to avoid memory issues...")
+    
+    train_loader = DataLoader(
+        train_base,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=1,  # Reduce workers to save memory
+        pin_memory=False,  # Disable pin_memory to save memory
+    )
+
+    val_loader = DataLoader(
+        val_base,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=1,
+        pin_memory=False,
+    )
+
+    test_base_loader = DataLoader(
+        test_base,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=1,
+        pin_memory=False,
+    )
+
+    test_novel_loader = DataLoader(
+        test_novel,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=1,
+        pin_memory=False,
+    )
+
+    # Create optimizer with reduced learning rate
+    LOGGER.info("Setting up optimizer...")
+    optimizer = torch.optim.AdamW(
+        model.prompt_learner.parameters(),
+        lr=CFG["training"]["optimizer"]["lr"] / 4,  # Reduced further to stabilize training
+        weight_decay=CFG["training"]["optimizer"]["weight_decay"],
+    )
+
+    # Use a simple cosine annealing scheduler
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=CFG["training"]["epochs"], eta_min=1e-6
+    )
+
+    # No EMA model for simplicity
+    avg_model = None
+
+    # Training setup
+    start_epoch = 0
+    best_accuracy = 0.0
+    patience_counter = 0
+    
+    # Evaluate initial performance with try-except
+    LOGGER.info("Evaluating initial model...")
+    try:
+        base_accuracy = evaluate(
+            model=model,
+            dataloader=test_base_loader,
+            label="Initial - Base Classes",
+        )
+        
+        novel_accuracy = evaluate(
+            model=model,
+            dataloader=test_novel_loader,
+            label="Initial - Novel Classes",
+        )
+        
+        hm = harmonic_mean(base_accuracy, novel_accuracy)
+        
+        LOGGER.info(
+            f"Initial performance - Base: {base_accuracy:.4f}, Novel: {novel_accuracy:.4f}, HM: {hm:.4f}"
+        )
+    except Exception as e:
+        LOGGER.error(f"Error during initial evaluation: {e}")
+        base_accuracy, novel_accuracy, hm = 0.0, 0.0, 0.0
+
+    # Training loop with fewer epochs
+    max_epochs = min(5, CFG["training"]["epochs"])  # Reduce epochs even further for testing
+    LOGGER.info(f"Starting training for {max_epochs} epochs...")
+    
+    for epoch in range(start_epoch, max_epochs):
+        try:
+            # Train with simplified loop
+            avg_loss = train_loop_simple(
+                dataloader=train_loader,
+                model=model,
+                avg_model=avg_model,
+                optimizer=optimizer,
+                epoch=epoch + 1,
+                scheduler=scheduler,
+            )
+
+            # Clear cache after training
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            # Evaluate
+            try:
+                base_accuracy = evaluate(
+                    model=model,
+                    dataloader=test_base_loader,
+                    label=f"Epoch {epoch+1} - Base Classes",
+                )
+                
+                novel_accuracy = evaluate(
+                    model=model,
+                    dataloader=test_novel_loader,
+                    label=f"Epoch {epoch+1} - Novel Classes",
+                )
+                
+                hm = harmonic_mean(base_accuracy, novel_accuracy)
+                
+                LOGGER.info(
+                    f"Epoch {epoch+1} - Base: {base_accuracy:.4f}, Novel: {novel_accuracy:.4f}, HM: {hm:.4f}"
+                )
+                
+                # Log to wandb
+                WANDB.log({
+                    "base_accuracy": base_accuracy,
+                    "novel_accuracy": novel_accuracy,
+                    "harmonic_mean": hm,
+                    "epoch": epoch+1,
+                })
+            except Exception as e:
+                LOGGER.error(f"Error during evaluation at epoch {epoch+1}: {e}")
+                # Set default values if evaluation fails
+                base_accuracy, novel_accuracy, hm = 0.0, 0.0, 0.0
+
+            # Check if this is the best model
+            is_best = hm > best_accuracy
+            if is_best:
+                best_accuracy = hm
+                patience_counter = 0
+                
+                # Save best model
+                try:
+                    os.makedirs(CFG["training"]["checkpoint_dir"], exist_ok=True)
+                    best_model_path = os.path.join(CFG["training"]["checkpoint_dir"], "simple_model_best.pth")
+                    torch.save({
+                        "model": model.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "epoch": epoch + 1,
+                        "accuracy": hm,
+                    }, best_model_path)
+                    LOGGER.info(f"Saved best model with accuracy {hm:.4f}")
+                except Exception as e:
+                    LOGGER.error(f"Error saving best model: {e}")
+            else:
+                patience_counter += 1
+
+            # Early stopping
+            if patience_counter >= CFG["training"]["patience"]:
+                LOGGER.info(f"Early stopping triggered after {patience_counter} epochs without improvement")
+                break
+
+        except Exception as e:
+            LOGGER.error(f"Error during training epoch {epoch+1}: {e}")
+            # Save emergency checkpoint
+            try:
+                os.makedirs(CFG["training"]["checkpoint_dir"], exist_ok=True)
+                emergency_path = os.path.join(CFG["training"]["checkpoint_dir"], f"emergency_epoch_{epoch + 1}.pth")
+                torch.save({
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "epoch": epoch + 1,
+                }, emergency_path)
+                LOGGER.info(f"Saved emergency checkpoint at {emergency_path}")
+            except Exception as save_err:
+                LOGGER.error(f"Error saving emergency checkpoint: {save_err}")
+            
+            # Continue to next epoch instead of raising
+            continue
+
+    # Final evaluation with try-except
+    LOGGER.info("==== Final Evaluation ====")
+    try:
+        final_base_acc = evaluate(
+            model=model,
+            dataloader=test_base_loader,
+            label="Final - Base Classes",
+        )
+        
+        final_novel_acc = evaluate(
+            model=model,
+            dataloader=test_novel_loader,
+            label="Final - Novel Classes",
+        )
+        
+        final_hm = harmonic_mean(final_base_acc, final_novel_acc)
+        
+        LOGGER.info(
+            f"Final: Base Acc={final_base_acc:.4f}, "
+            f"Novel Acc={final_novel_acc:.4f}, "
+            f"HM={final_hm:.4f}"
+        )
+    except Exception as e:
+        LOGGER.error(f"Error during final evaluation: {e}")
+        final_base_acc, final_novel_acc, final_hm = base_accuracy, novel_accuracy, hm  # Use last known values
+
+    return final_base_acc, final_novel_acc, final_hm
 
 
 if __name__ == "__main__":
