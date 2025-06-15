@@ -8,19 +8,20 @@
 
 # installing packages, use specific versions
 # TODO: Make sure HELIP requirements are well included here
-# !pip3 install torch==2.6.0 torchvision==0.21.0 open_clip_torch==2.32.0 wandb==0.19.10 scipy==1.15.3 segmentation-models-pytorch==0.5.0
+# !pip3 install torch==2.6.0 torchvision==0.21.0 ftfy regex tqdm wandb==0.19.10 scipy==1.15.3 segmentation-models-pytorch==0.5.0
+# !pip3 install git+https://github.com/openai/CLIP.git
 
 import numpy as np
 import logging
 import math
 import os
 import re
-from collections import OrderedDictfgh
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple, UnionCD
+from typing import Any, Callable, Optional, Tuple, Union
 
-import open_clip
+import clip
 import PIL.Image
 import segmentation_models_pytorch as smp
 import torch
@@ -36,10 +37,9 @@ from tqdm import tqdm
 import wandb
 
 CFG = {
-    "COCOOP": {
+    "COOP": {
         "base_model": {
-            "name": "ViT-B-32",
-            "weights": "laion2b_s34b_b79k",
+            "name": "ViT-B/32",  # OpenAI CLIP format
         },
         "prompt_learner": {
             "n_ctx": 4,  
@@ -61,7 +61,9 @@ CFG = {
     "training": {
         "resume_id": None,
         "resume_from": "best",
-        "batch_size": 32, 
+        "batch_size": 16, 
+        "micro_batch_size": 2,  # Size of micro-batches for processing large batches
+        "eval_micro_batch_size": 8,  # Size of micro-batches for evaluation
         "epochs": 50,  
         "warmup_epochs": 1, # TODO: More once model works  
         "patience": 5,
@@ -72,6 +74,7 @@ CFG = {
         },
         "scheduler": {
             "warmup_epochs": 3,
+            "eta_min": 1e-6,
         },
         "augmentation_mode": None,  # choose from: rotate_illumination, rotate_contrast, rotate_contrast_illumination,
         "seed": 47,
@@ -93,10 +96,10 @@ CFG = {
     },
     "helip": {
         "enabled": False,
-        "k": 5,  # Number of hard pairs to mine per sample, diminishing returns, in the paper they also suggested 3
+        "k": 3,  # Number of hard pairs to mine per sample, diminishing returns, in the paper they also suggested 3
         "p": 20,  # Number of random pairs to sample
-        "alpha": 0.25,  # Margin parameter for HNML (Hard Negative Mining Loss) # original: 0.25 # TUNE
-        "lambda_hnml": 0.5,  # Weight for HNML in the combined loss -                                 # TUNE
+        "alpha": 0.25,  # Margin parameter for HNML (Hard Negative Mining Loss) # original: 0.25 
+        "lambda_hnml": 0.5,  # Weight for HNML in the combined loss -                                 
         # TODO - 1: find a better value for key hyperparam
         # TODO - 2: balance this lambda with other regularizers lambdas, if all high, we'll underfit
         # (cross-modal consistency, augmentation, etc.)
@@ -104,11 +107,10 @@ CFG = {
         "cache_embeddings": True,  # Whether to cache embeddings between epochs, to avoid recomputing them
     },
     "promptsrc": {
-        "enabled": False,
+        "enabled": True,
         "mutual_agreement": {
-            "lambda_ma": 0.5,  # Weight for mutual agreement loss                                 # TUNE
+            "lambda_ma": 0.5,  # Weight for mutual agreement loss                                 
             "temperature": 0.07,  # Temperature scaling parameter
-            "schedule": True,  # Enable weight scheduling
         },
         "prompt_ensemble": {
             "enabled": True,
@@ -116,9 +118,8 @@ CFG = {
             "sigma": 2.0,  # Sigma for Gaussian weighting
         },
         "textual_diversity": {
-            "lambda_td": 0.3,  # Weight for textual diversity loss                                # TUNE
+            "lambda_td": 0.3,  # Weight for textual diversity loss                                
             "temperature": 0.07,  # Temperature for text similarity
-            "schedule": True,  # Enable weight scheduling
         },
     },
 }
@@ -143,8 +144,8 @@ WANDB = (
         entity="mhevizi-unitn",
         project="Deep learning project",
         config=CFG,
-        name="CoCoOp_" + RUN_ID,
-        tags=["cocoop", CFG["COCOOP"]["base_model"]["name"]],
+        name="CoOp_" + RUN_ID,
+        tags=["coop", CFG["COOP"]["base_model"]["name"]],
     )
     if CFG["wandb"]
     else wandb.init(mode="disabled")
@@ -271,7 +272,7 @@ CLASS_NAMES = [
     "gaura",
     "geranium",
     "orange dahlia",
-    "pink-yellow dahlia?",
+    "pink-yellow dahlia",
     "cautleya spicata",
     "japanese anemone",
     "black-eyed susan",
@@ -393,7 +394,6 @@ def split_data(dataset, base_classes):
 
 
 # HELIP
-
 
 class HardPairMining:
     def __init__(self, custom_clip_model, dataset):
@@ -629,9 +629,9 @@ def hard_negative_margin_loss(
 # 3. Create an ensemble of the prompts
 # 4. Use the ensemble as the prompt for the next forward pass
 class PromptEnsemble:
-    def __init__(self, window_size=5, sigma=2.0):
-        self.window_size = window_size
-        self.sigma = sigma
+    def __init__(self, window_size=None, sigma=None):
+        self.window_size = window_size if window_size is not None else CFG["promptsrc"]["prompt_ensemble"]["window_size"]
+        self.sigma = sigma if sigma is not None else CFG["promptsrc"]["prompt_ensemble"]["sigma"]
         self.prompt_history = []
 
     def update(self, current_prompt):
@@ -714,21 +714,9 @@ def textual_diversity_loss(text_features, temperature=0.07):
     return js_div
 
 
-# Implements scheduling for PromptSRC loss weights. Increase gradually the weights with a warmup phase for more stable training.
-def get_promptsrc_weights(epoch, max_epochs, base_ma=0.5, base_td=0.3):
-    # Linear warmup for first 20% of training
-    warmup_epochs = max_epochs * 0.2
-
-    if epoch < warmup_epochs:
-        # Gradually increase weights during warmup
-        factor = epoch / warmup_epochs
-        lambda_ma = base_ma * factor
-        lambda_td = base_td * factor
-    else:
-        # Use full weights after warmup
-        lambda_ma = base_ma
-        lambda_td = base_td
-
+def get_promptsrc_weights(epoch=None, max_epochs=None):
+    lambda_ma = CFG["promptsrc"]["mutual_agreement"]["lambda_ma"]  # 0.5
+    lambda_td = CFG["promptsrc"]["textual_diversity"]["lambda_td"]  # 0.3
     return lambda_ma, lambda_td
 
 
@@ -741,28 +729,27 @@ def train_loop_simple(
     scheduler=None,
 ):
     """
-    Simplified training loop based on the Lab3 implementation
-    to address memory issues.
+    Training loop optimized for vanilla CoCoOp.
     """
     model.train()
     total_loss = 0
     correct_predictions = 0
     total_samples = 0
     
-    # Progress bar for training
     progress_bar = tqdm(dataloader, desc=f"Train Epoch {epoch}")
     
     for batch_idx, (images, targets) in enumerate(progress_bar):
         try:
             # Process in smaller chunks if batch is too large
-            if images.size(0) > 2 and hasattr(images, "split"):
-                # Process in micro-batches of size 2
+            micro_batch_size = CFG["training"]["micro_batch_size"]
+            if images.size(0) > micro_batch_size and hasattr(images, "split"):
+                # Process in micro-batches
                 micro_losses = []
                 micro_correct = 0
                 micro_samples = 0
                 
-                for i in range(0, images.size(0), 2):
-                    end_idx = min(i + 2, images.size(0))
+                for i in range(0, images.size(0), micro_batch_size):
+                    end_idx = min(i + micro_batch_size, images.size(0))
                     micro_images = images[i:end_idx].to(DEVICE)
                     micro_targets = targets[i:end_idx].to(DEVICE)
                     
@@ -787,7 +774,8 @@ def train_loop_simple(
                     micro_samples += micro_images.size(0)
                     
                     # Clear cache between micro-batches
-                    torch.cuda.empty_cache()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                 
                 # Aggregate results
                 loss_val = sum(micro_losses) / len(micro_losses)
@@ -795,7 +783,7 @@ def train_loop_simple(
                 total_samples += micro_samples
                 total_loss += loss_val * micro_samples
             else:
-                # Move data to device
+                # Process full batch
                 images = images.to(DEVICE)
                 targets = targets.to(DEVICE)
                 
@@ -857,14 +845,16 @@ def train_loop_simple(
                 continue
             else:
                 LOGGER.error(f"Runtime error in training batch {batch_idx}: {e}")
-                continue
+                raise e
         except Exception as e:
             LOGGER.error(f"Error in training batch {batch_idx}: {e}")
-            continue
+            raise e
 
+    # Update learning rate scheduler
     if scheduler is not None:
         scheduler.step()
 
+    # Calculate average metrics
     if total_samples > 0:
         avg_loss = total_loss / total_samples
         avg_accuracy = 100. * correct_predictions / total_samples
@@ -873,6 +863,360 @@ def train_loop_simple(
         avg_accuracy = 0
 
     LOGGER.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}, Accuracy: {avg_accuracy:.2f}%")
+
+    return avg_loss
+
+
+def train_loop_complex(
+    dataloader,
+    model,
+    avg_model,
+    optimizer,
+    epoch,
+    scheduler=None,
+    base_model=None,
+    tokenizer=None,
+):
+    """
+    Enhanced training loop with PromptSRC features
+    """
+    model.train()
+    total_loss = 0
+    total_contrastive_loss = 0
+    total_ma_loss = 0
+    total_td_loss = 0
+    correct_predictions = 0
+    total_samples = 0
+    
+    # Get PromptSRC parameters
+    promptsrc_enabled = CFG["promptsrc"]["enabled"]
+    
+    # Get fixed weights for PromptSRC losses
+    if promptsrc_enabled:
+        lambda_ma, lambda_td = get_promptsrc_weights()
+    else:
+        lambda_ma, lambda_td = 0.0, 0.0
+    
+    temperature = CFG["promptsrc"]["mutual_agreement"]["temperature"]
+    
+    progress_bar = tqdm(dataloader, desc=f"Train Epoch {epoch}")
+    
+    for batch_idx, (images, targets) in enumerate(progress_bar):
+        try:
+            # Process in smaller chunks if batch is too large
+            micro_batch_size = CFG["training"]["micro_batch_size"]
+            if images.size(0) > micro_batch_size and hasattr(images, "split"):
+                micro_losses = []
+                micro_correct = 0
+                micro_samples = 0
+                micro_contrastive_losses = []
+                micro_ma_losses = []
+                micro_td_losses = []
+                
+                for i in range(0, images.size(0), micro_batch_size):
+                    end_idx = min(i + micro_batch_size, images.size(0))
+                    micro_images = images[i:end_idx].to(DEVICE)
+                    micro_targets = targets[i:end_idx].to(DEVICE)
+                    
+                    # Zero gradients for each micro-batch
+                    optimizer.zero_grad()
+                    
+                    # Forward pass with mixed precision
+                    with torch.cuda.amp.autocast():
+                        logits = model(micro_images)
+                        contrastive_loss = F.cross_entropy(logits, micro_targets)
+                        
+                        # Initialize PromptSRC losses
+                        ma_loss = torch.tensor(0.0, device=DEVICE)
+                        td_loss = torch.tensor(0.0, device=DEVICE)
+                        
+                        # Apply PromptSRC if enabled
+                        if promptsrc_enabled and base_model is not None:
+                            # Get original model features
+                            with torch.no_grad():
+                                original_image_features = base_model.encode_image(micro_images)
+                                original_image_features = original_image_features / original_image_features.norm(dim=-1, keepdim=True)
+                                
+                                                            # Create text templates for each class in the micro-batch
+                            text_inputs = [f"a photo of a {CLASS_NAMES[t.item()]}, a type of flower." for t in micro_targets]
+                            original_text_features = base_model.encode_text(
+                                clip.tokenize(text_inputs).to(DEVICE)
+                            )
+                            
+                            original_text_features = original_text_features / original_text_features.norm(dim=-1, keepdim=True)
+                            
+                            # Mutual agreement loss
+                            if lambda_ma > 0 and model.current_image_features is not None and model.current_text_features is not None:
+                                # Ensure we're only using features for the current micro-batch
+                                batch_size = micro_images.size(0)
+                                
+                                # Get prompted features for current batch
+                                prompted_image_features = model.current_image_features[:batch_size]
+                                
+                                # For text features, we need to be careful with the shape
+                                # If model.current_text_features has shape [batch_size * num_classes, feature_dim]
+                                # Extract just the relevant text features for this micro-batch
+                                if model.current_text_features.size(0) > batch_size:
+                                    # For CoCoOp-style models where text features contain all classes
+                                    # Extract only the features corresponding to the classes in this batch
+                                    prompted_text_features = torch.stack([
+                                        model.current_text_features[t.item()] 
+                                        for t in micro_targets
+                                    ])
+                                else:
+                                    # If text features are already batch-aligned
+                                    prompted_text_features = model.current_text_features[:batch_size]
+                                
+                                # Now compute mutual agreement loss with properly aligned features
+                                ma_loss = mutual_agreement_loss(
+                                    prompted_image_features,
+                                    prompted_text_features,
+                                    original_image_features,
+                                    original_text_features,
+                                    temperature=temperature
+                                )
+                            
+                            # Textual diversity loss
+                            if lambda_td > 0 and model.current_text_features is not None:
+                                # Similar handling for text features as above
+                                batch_size = micro_images.size(0)
+                                
+                                if model.current_text_features.size(0) > batch_size:
+                                    text_features_for_td = torch.stack([
+                                        model.current_text_features[t.item()] 
+                                        for t in micro_targets
+                                    ])
+                                else:
+                                    text_features_for_td = model.current_text_features[:batch_size]
+                                    
+                                td_loss = textual_diversity_loss(
+                                    text_features_for_td,
+                                    temperature=temperature
+                                )
+                        
+                        # Combined loss
+                        loss = contrastive_loss
+                        if promptsrc_enabled:
+                            loss = loss + lambda_ma * ma_loss + lambda_td * td_loss
+                    
+                    # Backward pass
+                    loss.backward()
+                    
+                    # Update weights
+                    optimizer.step()
+                    
+                    # Statistics
+                    micro_losses.append(loss.item())
+                    micro_contrastive_losses.append(contrastive_loss.item())
+                    micro_ma_losses.append(ma_loss.item() if isinstance(ma_loss, torch.Tensor) else 0.0)
+                    micro_td_losses.append(td_loss.item() if isinstance(td_loss, torch.Tensor) else 0.0)
+                    
+                    _, predicted = logits.max(1)
+                    micro_correct += predicted.eq(micro_targets).sum().item()
+                    micro_samples += micro_images.size(0)
+                    
+                    # Clear cache between micro-batches
+                    torch.cuda.empty_cache()
+                
+                # Aggregate results
+                loss_val = sum(micro_losses) / len(micro_losses)
+                cont_loss_val = sum(micro_contrastive_losses) / len(micro_contrastive_losses)
+                ma_loss_val = sum(micro_ma_losses) / len(micro_ma_losses)
+                td_loss_val = sum(micro_td_losses) / len(micro_td_losses)
+                
+                correct_predictions += micro_correct
+                total_samples += micro_samples
+                total_loss += loss_val * micro_samples
+                total_contrastive_loss += cont_loss_val * micro_samples
+                total_ma_loss += ma_loss_val * micro_samples
+                total_td_loss += td_loss_val * micro_samples
+            else:
+                # Move data to device
+                images = images.to(DEVICE)
+                targets = targets.to(DEVICE)
+                
+                # Zero gradients
+                optimizer.zero_grad()
+                
+                # Forward pass with mixed precision
+                with torch.cuda.amp.autocast():
+                    logits = model(images)
+                    contrastive_loss = F.cross_entropy(logits, targets)
+                    
+                    # Initialize PromptSRC losses
+                    ma_loss = torch.tensor(0.0, device=DEVICE)
+                    td_loss = torch.tensor(0.0, device=DEVICE)
+                    
+                    # Apply PromptSRC if enabled
+                    if promptsrc_enabled and base_model is not None:
+                        # Get original model features
+                        with torch.no_grad():
+                            original_image_features = base_model.encode_image(images)
+                            original_image_features = original_image_features / original_image_features.norm(dim=-1, keepdim=True)
+                            
+                            # Create text templates for each class in the batch
+                            text_inputs = [f"a photo of a {CLASS_NAMES[t.item()]}, a type of flower." for t in targets]
+                            original_text_features = base_model.encode_text(
+                                clip.tokenize(text_inputs).to(DEVICE)
+                            )
+                            original_text_features = original_text_features / original_text_features.norm(dim=-1, keepdim=True)
+                        
+                        # Mutual agreement loss
+                        if lambda_ma > 0 and model.current_image_features is not None and model.current_text_features is not None:
+                            batch_size = images.size(0)
+                            
+                            # Get prompted features for current batch
+                            prompted_image_features = model.current_image_features[:batch_size]
+                            
+                            # Handle text features based on their shape
+                            if model.current_text_features.size(0) > batch_size:
+                                # Extract only the features corresponding to the classes in this batch
+                                prompted_text_features = torch.stack([
+                                    model.current_text_features[t.item()] 
+                                    for t in targets
+                                ])
+                            else:
+                                prompted_text_features = model.current_text_features[:batch_size]
+                            
+                            ma_loss = mutual_agreement_loss(
+                                prompted_image_features,
+                                prompted_text_features,
+                                original_image_features,
+                                original_text_features,
+                                temperature=temperature
+                            )
+                        
+                        # Textual diversity loss
+                        if lambda_td > 0 and model.current_text_features is not None:
+                            batch_size = images.size(0)
+                            
+                            if model.current_text_features.size(0) > batch_size:
+                                text_features_for_td = torch.stack([
+                                    model.current_text_features[t.item()] 
+                                    for t in targets
+                                ])
+                            else:
+                                text_features_for_td = model.current_text_features[:batch_size]
+                                
+                            td_loss = textual_diversity_loss(
+                                text_features_for_td,
+                                temperature=temperature
+                            )
+                    
+                    # Combined loss
+                    loss = contrastive_loss
+                    if promptsrc_enabled:
+                        loss = loss + lambda_ma * ma_loss + lambda_td * td_loss
+                
+                # Backward pass and optimize
+                loss.backward()
+                optimizer.step()
+                
+                # Update EMA model if available
+                if avg_model:
+                    avg_model.update_parameters(model)
+                
+                # Statistics
+                loss_val = loss.item()
+                cont_loss_val = contrastive_loss.item()
+                ma_loss_val = ma_loss.item() if isinstance(ma_loss, torch.Tensor) else 0.0
+                td_loss_val = td_loss.item() if isinstance(td_loss, torch.Tensor) else 0.0
+                
+                total_loss += loss_val * images.size(0)
+                total_contrastive_loss += cont_loss_val * images.size(0)
+                total_ma_loss += ma_loss_val * images.size(0)
+                total_td_loss += td_loss_val * images.size(0)
+                
+                _, predicted = logits.max(1)
+                correct_predictions += predicted.eq(targets).sum().item()
+                total_samples += images.size(0)
+            
+            # Calculate accuracy
+            if total_samples > 0:
+                accuracy = 100. * correct_predictions / total_samples
+            else:
+                accuracy = 0.0
+            
+            # Update progress bar
+            if promptsrc_enabled:
+                progress_bar.set_postfix({
+                    "loss": f"{loss_val:.4f}",
+                    "cont": f"{cont_loss_val:.4f}",
+                    "ma": f"{ma_loss_val:.4f}",
+                    "td": f"{td_loss_val:.4f}",
+                    "acc": f"{accuracy:.2f}%",
+                })
+            else:
+                progress_bar.set_postfix({
+                    "loss": f"{loss_val:.4f}",
+                    "acc": f"{accuracy:.2f}%",
+                })
+            
+            # Log to wandb
+            log_data = {
+                "train_loss": loss_val,
+                "train_acc": accuracy,
+                "train_avg_loss": total_loss / total_samples if total_samples > 0 else 0,
+                "learning_rate": optimizer.param_groups[0]["lr"],
+                "batch": batch_idx + epoch * len(dataloader),
+            }
+            
+            if promptsrc_enabled:
+                log_data.update({
+                    "contrastive_loss": cont_loss_val,
+                    "mutual_agreement_loss": ma_loss_val,
+                    "textual_diversity_loss": td_loss_val,
+                    "lambda_ma": lambda_ma,
+                    "lambda_td": lambda_td,
+                })
+            
+            WANDB.log(log_data)
+            
+            # Clear cache periodically
+            if batch_idx % 5 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+        except RuntimeError as e:
+            if 'out of memory' in str(e).lower():
+                LOGGER.error(f"CUDA OOM in training batch {batch_idx}: {e}")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                continue
+            else:
+                LOGGER.error(f"Runtime error in training batch {batch_idx}: {e}")
+                continue
+        except Exception as e:
+            LOGGER.error(f"Error in training batch {batch_idx}: {e}")
+            continue
+
+    if scheduler is not None:
+        scheduler.step()
+
+    # Calculate average metrics
+    if total_samples > 0:
+        avg_loss = total_loss / total_samples
+        avg_contrastive_loss = total_contrastive_loss / total_samples
+        avg_ma_loss = total_ma_loss / total_samples if promptsrc_enabled else 0.0
+        avg_td_loss = total_td_loss / total_samples if promptsrc_enabled else 0.0
+        avg_accuracy = 100. * correct_predictions / total_samples
+    else:
+        avg_loss = 0
+        avg_contrastive_loss = 0
+        avg_ma_loss = 0
+        avg_td_loss = 0
+        avg_accuracy = 0
+
+    # Log epoch statistics
+    if promptsrc_enabled:
+        LOGGER.info(
+            f"Epoch {epoch} - Training Loss: {avg_loss:.4f}, "
+            f"Contrastive Loss: {avg_contrastive_loss:.4f}, "
+            f"MA Loss: {avg_ma_loss:.4f}, "
+            f"TD Loss: {avg_td_loss:.4f}, "
+            f"Accuracy: {avg_accuracy:.2f}%"
+        )
+    else:
+        LOGGER.info(f"Epoch {epoch} - Training Loss: {avg_loss:.4f}, Accuracy: {avg_accuracy:.2f}%")
 
     return avg_loss
 
@@ -895,7 +1239,6 @@ def train_loop(
     lambda_ma=0.5,  # Weight for mutual agreement loss
     lambda_td=0.3,  # Weight for textual diversity loss
     temperature=0.07,  # Temperature for loss calculation
-    max_epochs=None,  # Max epochs for weight scheduling
 ):
     model.train()
     total_loss = 0
@@ -906,24 +1249,12 @@ def train_loop(
     total_ma_loss = 0
     total_td_loss = 0
 
-    # Get scheduled weights if enabled
-    if (
-        use_promptsrc
-        and max_epochs is not None
-        and CFG["promptsrc"]["mutual_agreement"].get("schedule", False)
-    ):
-        lambda_ma, lambda_td = get_promptsrc_weights(
-            epoch,
-            max_epochs,
-            base_ma=CFG["promptsrc"]["mutual_agreement"]["lambda_ma"],
-            base_td=CFG["promptsrc"]["textual_diversity"]["lambda_td"],
-        )
-        LOGGER.info(
-            f"PromptSRC scheduled weights: lambda_ma={lambda_ma:.4f}, lambda_td={lambda_td:.4f}"
-        )
+    # Get fixed weights for PromptSRC losses
+    if use_promptsrc:
+        lambda_ma, lambda_td = get_promptsrc_weights()
+        LOGGER.info(f"PromptSRC weights: lambda_ma={lambda_ma:.4f}, lambda_td={lambda_td:.4f}")
     # End PromptSRC
 
-    # Progress bar for training
     progress_bar = tqdm(dataloader, desc=f"Train Epoch {epoch}")
 
     # Initialize hard_pairs as empty dict by default
@@ -1369,54 +1700,74 @@ def evaluate(model, dataloader, label=""):
                 
                 # Process in smaller batches if needed
                 batch_size = image.size(0)
-                if batch_size > 8 and hasattr(image, "split"):
+                eval_micro_batch_size = CFG["training"]["eval_micro_batch_size"]
+                if batch_size > eval_micro_batch_size and hasattr(image, "split"):
                     # Split into smaller chunks to save memory
-                    sub_batches = [(image[i:i+8], target[i:i+8]) for i in range(0, batch_size, 8)]
+                    sub_batches = [(image[i:i+eval_micro_batch_size], target[i:i+eval_micro_batch_size]) 
+                                   for i in range(0, batch_size, eval_micro_batch_size)]
                     
                     for sub_img, sub_target in sub_batches:
-                        with torch.cuda.amp.autocast():  # Use mixed precision
-                            try:
-                                logits = model(sub_img)
-                                
-                                # Get predictions
-                                _, predicted = logits.max(1)
-                                correct_predictions += (predicted == sub_target).sum().item()
-                                total_samples += sub_target.size(0)
-                            except Exception as e:
-                                LOGGER.warning(f"Error in evaluation sub-batch: {e}")
-                                total_samples += sub_target.size(0)  # Still count these samples
+                        # Forward pass
+                        logits = model(sub_img)
+                        
+                        # Calculate accuracy
+                        _, predicted = logits.max(1)
+                        correct_predictions += predicted.eq(sub_target).sum().item()
+                        total_samples += sub_img.size(0)
+                        
+                        # Clear cache between sub-batches
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
                 else:
-                    # Process normally for small batches
-                    with torch.cuda.amp.autocast():  # Use mixed precision
-                        try:
-                            logits = model(image)
-                            
-                            # Get predictions
-                            _, predicted = logits.max(1)
-                            correct_predictions += (predicted == target).sum().item()
-                            total_samples += target.size(0)
-                        except Exception as e:
-                            LOGGER.warning(f"Error in evaluation batch: {e}")
-                            total_samples += target.size(0)  # Still count these samples
-                
-                # Clear cache to save memory
-                if hasattr(torch.cuda, 'empty_cache'):
-                    torch.cuda.empty_cache()
+                    # Forward pass
+                    logits = model(image)
+                    
+                    # Calculate accuracy
+                    _, predicted = logits.max(1)
+                    correct_predictions += predicted.eq(target).sum().item()
+                    total_samples += image.size(0)
+                    
+            except RuntimeError as e:
+                if 'out of memory' in str(e).lower():
+                    LOGGER.error(f"CUDA OOM in evaluation: {e}")
+                    # Try to process one by one
+                    if image.size(0) > 1:
+                        for i in range(image.size(0)):
+                            try:
+                                # Process single image
+                                single_img = image[i:i+1]
+                                single_target = target[i:i+1]
+                                
+                                logits = model(single_img)
+                                _, predicted = logits.max(1)
+                                correct_predictions += predicted.eq(single_target).sum().item()
+                                total_samples += 1
+                                
+                                # Clear cache after each image
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                            except Exception as inner_e:
+                                LOGGER.error(f"Error processing single image: {inner_e}")
+                                continue
+                    else:
+                        LOGGER.error("Cannot process even a single image due to OOM")
+                else:
+                    LOGGER.error(f"Runtime error in evaluation: {e}")
             except Exception as e:
-                LOGGER.warning(f"Error processing batch in evaluation: {e}")
-                continue
-        
-        # Compute accuracy
+                LOGGER.error(f"Error in evaluation: {e}")
+                
+        # Calculate accuracy
         if total_samples > 0:
             accuracy = correct_predictions / total_samples
         else:
-            LOGGER.warning(f"No samples processed in {label}. Returning 0 accuracy.")
             accuracy = 0.0
             
+        LOGGER.info(f"{label} - Accuracy: {accuracy:.4f} ({correct_predictions}/{total_samples})")
+        
         return accuracy
     except Exception as e:
-        LOGGER.error(f"Error in evaluation: {e}")
-        return 0.0  # Return 0 accuracy in case of errors
+        LOGGER.error(f"Error in evaluation function: {e}")
+        return 0.0
 
 
 def harmonic_mean(base_accuracy, novel_accuracy):
@@ -1478,13 +1829,14 @@ class TextEncoder(torch.nn.Module):
         self.positional_embedding = clip_model.positional_embedding
         self.ln_final = clip_model.ln_final
         self.text_projection = clip_model.text_projection
+        self.dtype = clip_model.dtype
 
     def forward(self, prompts, tokenized_prompts):
-        x = prompts + self.positional_embedding
+        x = prompts + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
-        x = self.ln_final(x)
+        x = self.ln_final(x).type(self.dtype)
 
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
@@ -1496,15 +1848,16 @@ class TextEncoder(torch.nn.Module):
         return x
 
 
-class SimplePromptLearner(torch.nn.Module):
+class PromptLearner(torch.nn.Module):
     """
-    Simplified PromptLearner based on the Lab3 implementation.
+    CoOp PromptLearner that uses static learnable context vectors.
     """
-    def __init__(self, classnames, clip_model, tokenizer):
+    def __init__(self, classnames, clip_model):
         super().__init__()
         n_cls = len(classnames)
-        n_ctx = CFG["COCOOP"]["prompt_learner"]["n_ctx"]
-        ctx_init = CFG["COCOOP"]["prompt_learner"]["ctx_init"]
+        n_ctx = CFG["COOP"]["prompt_learner"]["n_ctx"]
+        ctx_init = CFG["COOP"]["prompt_learner"]["ctx_init"]
+        dtype = clip_model.dtype
         ctx_dim = clip_model.ln_final.weight.shape[0]
         
         # Random initialization of context tokens
@@ -1512,28 +1865,30 @@ class SimplePromptLearner(torch.nn.Module):
             # Use given words to initialize context vectors
             ctx_init = ctx_init.replace("_", " ")
             n_ctx = len(ctx_init.split(" "))
-            prompt = tokenizer(ctx_init).to(DEVICE)
+            prompt = clip.tokenize(ctx_init).to(DEVICE)
             with torch.no_grad():
-                embedding = clip_model.token_embedding(prompt)
+                embedding = clip_model.token_embedding(prompt).type(dtype)
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
             # Random initialization
-            ctx_vectors = torch.empty(n_ctx, ctx_dim, device=DEVICE)
+            ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype, device=DEVICE)
             torch.nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
         
-        self.ctx = torch.nn.Parameter(ctx_vectors)
+        print(f'Initial context: "{prompt_prefix}"')
+        print(f"Number of context words (tokens): {n_ctx}")
+        
+        self.ctx = torch.nn.Parameter(ctx_vectors)  # to be optimized
         
         # Format class prompts
         classnames = [name.replace("_", " ") for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
         
         # Tokenize prompts
-        tokenized_prompts = torch.cat([tokenizer(p) for p in prompts]).to(DEVICE)
-        
+        tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts]).to(DEVICE)
         with torch.no_grad():
-            embedding = clip_model.token_embedding(tokenized_prompts)
+            embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
         
         # These token vectors will be saved when in save_model(),
         # but they should be ignored in load_model() as we want to use
@@ -1543,97 +1898,139 @@ class SimplePromptLearner(torch.nn.Module):
         
         self.n_cls = n_cls
         self.n_ctx = n_ctx
-        self.tokenized_prompts = tokenized_prompts
-    
+        self.tokenized_prompts = tokenized_prompts  # torch.Tensor
+        self.name_lens = [len(clip.tokenize(name)[0]) - 2 for name in classnames]  # -2 for [SOS] and [EOS] tokens
+        self.class_token_position = "end"  # position of class token
+        
     def forward(self):
         ctx = self.ctx
+        if ctx.dim() == 2:
+            ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1)
+
         prefix = self.token_prefix
         suffix = self.token_suffix
-        
-        # Use same context vectors for all classes
-        ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1)
-        
-        # Combine prefix, context vectors, and suffix
-        prompts = torch.cat([
-            prefix,      # (n_cls, 1, dim)
-            ctx,         # (n_cls, n_ctx, dim)
-            suffix,      # (n_cls, *, dim)
-        ], dim=1)
-        
+
+        if self.class_token_position == "end":
+            prompts = torch.cat(
+                [
+                    prefix,  # (n_cls, 1, dim)
+                    ctx,     # (n_cls, n_ctx, dim)
+                    suffix,  # (n_cls, *, dim)
+                ],
+                dim=1,
+            )
+
+        elif self.class_token_position == "middle":
+            half_n_ctx = self.n_ctx // 2
+            prompts = []
+            for i in range(self.n_cls):
+                name_len = self.name_lens[i]
+                prefix_i = prefix[i : i + 1, :, :]
+                class_i = suffix[i : i + 1, :name_len, :]
+                suffix_i = suffix[i : i + 1, name_len:, :]
+                ctx_i_half1 = ctx[i : i + 1, :half_n_ctx, :]
+                ctx_i_half2 = ctx[i : i + 1, half_n_ctx:, :]
+                prompt = torch.cat(
+                    [
+                        prefix_i,     # (1, 1, dim)
+                        ctx_i_half1,  # (1, n_ctx//2, dim)
+                        class_i,      # (1, name_len, dim)
+                        ctx_i_half2,  # (1, n_ctx//2, dim)
+                        suffix_i,     # (1, *, dim)
+                    ],
+                    dim=1,
+                )
+                prompts.append(prompt)
+            prompts = torch.cat(prompts, dim=0)
+
+        elif self.class_token_position == "front":
+            prompts = []
+            for i in range(self.n_cls):
+                name_len = self.name_lens[i]
+                prefix_i = prefix[i : i + 1, :, :]
+                class_i = suffix[i : i + 1, :name_len, :]
+                suffix_i = suffix[i : i + 1, name_len:, :]
+                ctx_i = ctx[i : i + 1, :, :]
+                prompt = torch.cat(
+                    [
+                        prefix_i,  # (1, 1, dim)
+                        class_i,   # (1, name_len, dim)
+                        ctx_i,     # (1, n_ctx, dim)
+                        suffix_i,  # (1, *, dim)
+                    ],
+                    dim=1,
+                )
+                prompts.append(prompt)
+            prompts = torch.cat(prompts, dim=0)
+
+        else:
+            raise ValueError
+
         return prompts
 
 
-class SimpleCustomCLIP(torch.nn.Module):
+class CustomCLIP(torch.nn.Module):
     """
-    Simplified CustomCLIP model based on the Lab3 implementation.
+    CoOp-based CustomCLIP model that uses static learnable prompts.
     """
-    def __init__(self, classnames, clip_model, tokenizer):
+    def __init__(self, classnames, clip_model):
         super().__init__()
-        self.prompt_learner = SimplePromptLearner(classnames, clip_model, tokenizer)
+        self.prompt_learner = PromptLearner(classnames, clip_model)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
-
+        self.dtype = clip_model.dtype
+        self.classnames = classnames
+        
+        # Storage for features (needed for analysis and debugging)
+        self.current_image_features = None
+        self.current_text_features = None
+        
+        # Add prompt ensemble if enabled
+        if CFG["promptsrc"]["prompt_ensemble"]["enabled"]:
+            window_size = CFG["promptsrc"]["prompt_ensemble"]["window_size"]
+            sigma = CFG["promptsrc"]["prompt_ensemble"]["sigma"]
+            self.prompt_ensemble = PromptEnsemble(window_size=window_size, sigma=sigma)
+        else:
+            self.prompt_ensemble = None
+    
     def forward(self, image):
-        try:
-            # Process image through encoder
-            image_features = self.image_encoder(image)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-
-            # Get context-aware prompts
-            prompts = self.prompt_learner()
-            
-            # Process through text encoder
-            text_features = self.text_encoder(prompts, self.tokenized_prompts)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-
-            # Compute logits
-            logit_scale = self.logit_scale.exp()
-            logits = logit_scale * image_features @ text_features.t()
-
-            return logits
-        except RuntimeError as e:
-            if 'out of memory' in str(e).lower():
-                LOGGER.error(f"CUDA out of memory in forward pass: {e}")
-                # Clear cache and retry with smaller processing
-                torch.cuda.empty_cache()
-                if image.size(0) > 1:
-                    # Try processing one image at a time
-                    all_logits = []
-                    for i in range(image.size(0)):
-                        # Process single image
-                        single_logit = self(image[i:i+1])
-                        all_logits.append(single_logit)
-                    # Stack results
-                    return torch.cat(all_logits, dim=0)
-                else:
-                    # Can't reduce batch size further, raise error
-                    raise e
-            else:
-                # Other runtime error
-                LOGGER.error(f"Error in forward pass: {e}")
-                raise e
+        # Extract image features
+        image_features = self.image_encoder(image.type(self.dtype))
+        self.current_image_features = image_features
+        
+        # Generate prompts (static, not conditioned on image)
+        prompts = self.prompt_learner()
+        
+        # Get text features
+        text_features = self.text_encoder(prompts, self.tokenized_prompts)
+        self.current_text_features = text_features
+        
+        # Apply prompt ensemble if enabled
+        if self.prompt_ensemble is not None and self.training:
+            # Update the ensemble with current prompt
+            self.prompt_ensemble.update(self.prompt_learner.ctx.data)
+        
+        # Normalize features
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        
+        # Calculate logits
+        logit_scale = self.logit_scale.exp()
+        logits = logit_scale * image_features @ text_features.t()
+        
+        return logits
 
 
 def create_base_model():
-    # For memory efficiency, we'll use a smaller model variant
-    # Change from ViT-B-32 to ViT-B-16 or RN50
-    model_name = "RN50"  # Smaller model than ViT-B-32
-    model_weights = "openai"  # Using standard OpenAI weights
+    # Use the model specified in the config
+    model_name = CFG["COOP"]["base_model"]["name"]
     
-    LOGGER.info(f"Creating smaller base model {model_name} with {model_weights} weights to save memory")
+    LOGGER.info(f"Creating base model {model_name}")
     
-    result = open_clip.create_model_from_pretrained(
-        model_name=model_name,
-        pretrained=model_weights,
-        return_transform=True,
-    )
-    assert isinstance(result, tuple)
-    model, preprocess = result
-    tokenizer = open_clip.get_tokenizer(model_name)
-    model = model.to(DEVICE)
-    return model, preprocess, tokenizer
+    model, preprocess = clip.load(model_name, device=DEVICE)
+    return model, preprocess
 
 def create_segmentation_model():
     model = smp.create_model(
@@ -1651,14 +2048,13 @@ def create_segmentation_model():
     return model, normalizer_transform, size_transform
 
 def create_custom_model(segmentation_model=None, segmentation_transform=None):
-    base_model, preprocess, tokenizer = create_base_model()
-    model = SimpleCustomCLIP(CLASS_NAMES, base_model, tokenizer)
+    base_model, preprocess = create_base_model()
+    model = CustomCLIP(CLASS_NAMES, base_model)
     return (
         base_model,
         model,
         preprocess,
-        tokenizer,
-    )  # adding tokenizer in line with "self.prompt_learner" definiton
+    )
 
 
 def image_augmentation(mode, base_preprocess):
@@ -1705,7 +2101,7 @@ def get_optimizer_and_scheduler(model):
     # First, use warmup
     if CFG["training"]["warmup_epochs"] > 0:
         warmup_scheduler = (
-            torch.optim.lr_scheduler.LinearLR(  # TODO: Explore better warmups
+            torch.optim.lr_scheduler.LinearLR(  
                 optimizer,
                 start_factor=0.01,
                 end_factor=1.0,
@@ -1717,7 +2113,7 @@ def get_optimizer_and_scheduler(model):
 
     # Then use cosine annealing for the main training
     cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=CFG["training"]["epochs"], eta_min=1e-6
+        optimizer, T_max=CFG["training"]["epochs"], eta_min=CFG["training"]["scheduler"]["eta_min"]
     )
     schedulers.append(cosine_scheduler)
 
@@ -1934,7 +2330,7 @@ def train_cocoop():
     LOGGER.info(f"Config: {CFG}")
 
     LOGGER.info("Creating models...")
-    base_model, custom_model, base_preprocess, tokenizer = create_custom_model(segmentation_model, segmentation_transform)
+    base_model, custom_model, base_preprocess = create_custom_model(segmentation_model, segmentation_transform)
     base_model = base_model.to(DEVICE)
     custom_model = custom_model.to(DEVICE)
 
@@ -2069,7 +2465,7 @@ def train_cocoop():
                 # PromptSRC
                 use_promptsrc=promptsrc_enabled,
                 base_model=base_model if promptsrc_enabled else None,
-                tokenizer=tokenizer if promptsrc_enabled else None,
+                tokenizer=clip.tokenize if promptsrc_enabled else None,
                 lambda_ma=mutual_agreement_cfg["lambda_ma"]
                 if promptsrc_enabled
                 else 0.0,
@@ -2079,8 +2475,6 @@ def train_cocoop():
                 temperature=mutual_agreement_cfg["temperature"]
                 if promptsrc_enabled
                 else 0.07,
-                max_epochs=CFG["training"]["epochs"],
-                # End PromptSRC
             )
 
             # Evaluate on test sets (base and novel)
@@ -2181,9 +2575,14 @@ def train_cocoop():
 
 def main():
     try:
-        # Run simplified training to address memory issues
-        LOGGER.info("Starting simplified CoCoOp training...")
-        best_base_acc, best_novel_acc, best_hm = train_cocoop_simple()
+        # Choose which training function to use based on PromptSRC being enabled
+        if CFG["promptsrc"]["enabled"]:
+            LOGGER.info("Starting CoOp training with PromptSRC...")
+            best_base_acc, best_novel_acc, best_hm = train_cocoop()
+        else:
+            # Run CoOp training
+            LOGGER.info("Starting CoOp training...")
+            best_base_acc, best_novel_acc, best_hm = train_coop_simple()
         
         LOGGER.info("==== Results Summary ====")
         LOGGER.info(
@@ -2200,27 +2599,28 @@ def main():
         WANDB.finish()
 
 
-def train_cocoop_simple():
+def train_coop_simple():
     """
-    Simplified training function for CoCoOp based on Lab3 implementation to address memory issues.
+    Training function for vanilla CoOp (Context Optimization).
     """
     # Try to free as much CUDA memory as possible
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
+    # Set random seeds for reproducibility
     torch.manual_seed(CFG["training"]["seed"])
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(CFG["training"]["seed"])
 
-    LOGGER.info("==== Starting Simple CoCoOp Training ====")
+    LOGGER.info("==== Starting CoOp Training ====")
     LOGGER.info(f"Config: {CFG}")
 
     # Create model
     LOGGER.info("Creating models...")
-    base_model, preprocess, tokenizer = create_base_model()
+    base_model, preprocess = create_base_model()
     
-    # Create simple custom model without segmentation
-    model = SimpleCustomCLIP(CLASS_NAMES, base_model, tokenizer).to(DEVICE)
+    # Create CoOp model with static learnable prompts
+    model = CustomCLIP(CLASS_NAMES, base_model).to(DEVICE)
     
     # Get datasets
     LOGGER.info("Loading datasets...")
@@ -2238,64 +2638,71 @@ def train_cocoop_simple():
     val_base, _ = split_data(val_set, base_classes)
     test_base, test_novel = split_data(test_set, base_classes)
 
-    # Create dataloaders with much smaller batch size to save memory
-    batch_size = 4  # Very small batch size to avoid CUDA OOM
-    LOGGER.info(f"Creating dataloaders with very small batch size {batch_size} to avoid memory issues...")
+    batch_size = CFG["training"]["batch_size"]
+    LOGGER.info(f"Creating dataloaders with batch size {batch_size}...")
     
     train_loader = DataLoader(
         train_base,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=1,  # Reduce workers to save memory
-        pin_memory=False,  # Disable pin_memory to save memory
+        num_workers=CFG["data"]["num_workers"],
+        pin_memory=CFG["data"]["pin_memory"],
     )
 
     val_loader = DataLoader(
         val_base,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=1,
-        pin_memory=False,
+        num_workers=CFG["data"]["num_workers"],
+        pin_memory=CFG["data"]["pin_memory"],
     )
 
     test_base_loader = DataLoader(
         test_base,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=1,
-        pin_memory=False,
+        num_workers=CFG["data"]["num_workers"],
+        pin_memory=CFG["data"]["pin_memory"],
     )
 
     test_novel_loader = DataLoader(
         test_novel,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=1,
-        pin_memory=False,
+        num_workers=CFG["data"]["num_workers"],
+        pin_memory=CFG["data"]["pin_memory"],
     )
 
-    # Create optimizer with reduced learning rate
+    # Create optimizer - only optimize prompt learner parameters
     LOGGER.info("Setting up optimizer...")
+    
+    # For CoOp, we only optimize the context vectors
     optimizer = torch.optim.AdamW(
         model.prompt_learner.parameters(),
-        lr=CFG["training"]["optimizer"]["lr"] / 4,  # Reduced further to stabilize training
+        lr=CFG["training"]["optimizer"]["lr"],
         weight_decay=CFG["training"]["optimizer"]["weight_decay"],
     )
 
-    # Use a simple cosine annealing scheduler
+    # Use a cosine annealing scheduler with warmup
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=CFG["training"]["epochs"], eta_min=1e-6
+        optimizer, T_max=CFG["training"]["epochs"], eta_min=CFG["training"]["scheduler"]["eta_min"]
     )
 
-    # No EMA model for simplicity
+    # Create EMA model if enabled
     avg_model = None
+    if CFG["validation"]["ema"]["enabled"]:
+        avg_model = AveragedModel(
+            model,
+            multi_avg_fn=get_ema_multi_avg_fn(CFG["validation"]["ema"]["decay"]),
+        )
+        LOGGER.info(f"Created EMA model with decay {CFG['validation']['ema']['decay']}")
 
     # Training setup
     start_epoch = 0
     best_accuracy = 0.0
     patience_counter = 0
     
-    # Evaluate initial performance with try-except
+    # Evaluate initial zero-shot performance
     LOGGER.info("Evaluating initial model...")
     try:
         base_accuracy = evaluate(
@@ -2315,17 +2722,22 @@ def train_cocoop_simple():
         LOGGER.info(
             f"Initial performance - Base: {base_accuracy:.4f}, Novel: {novel_accuracy:.4f}, HM: {hm:.4f}"
         )
+        
+        # Store for comparison later
+        base_zero_shot_acc = base_accuracy
+        novel_zero_shot_acc = novel_accuracy
+        zero_shot_hm = hm
+        
     except Exception as e:
         LOGGER.error(f"Error during initial evaluation: {e}")
         base_accuracy, novel_accuracy, hm = 0.0, 0.0, 0.0
+        base_zero_shot_acc, novel_zero_shot_acc, zero_shot_hm = 0.0, 0.0, 0.0
 
-    # Training loop with fewer epochs
-    max_epochs = min(5, CFG["training"]["epochs"])  # Reduce epochs even further for testing
-    LOGGER.info(f"Starting training for {max_epochs} epochs...")
+    LOGGER.info(f"Starting training for {CFG['training']['epochs']} epochs...")
     
-    for epoch in range(start_epoch, max_epochs):
+    for epoch in range(start_epoch, CFG["training"]["epochs"]):
         try:
-            # Train with simplified loop
+            # Train with CoOp-optimized loop
             avg_loss = train_loop_simple(
                 dataloader=train_loader,
                 model=model,
@@ -2366,6 +2778,41 @@ def train_cocoop_simple():
                     "harmonic_mean": hm,
                     "epoch": epoch+1,
                 })
+                
+                # Evaluate with EMA model if available
+                if avg_model:
+                    ema_base_acc = evaluate(
+                        model=avg_model,
+                        dataloader=test_base_loader,
+                        label=f"Epoch {epoch+1} - EMA Base Classes",
+                    )
+                    
+                    ema_novel_acc = evaluate(
+                        model=avg_model,
+                        dataloader=test_novel_loader,
+                        label=f"Epoch {epoch+1} - EMA Novel Classes",
+                    )
+                    
+                    ema_hm = harmonic_mean(ema_base_acc, ema_novel_acc)
+                    
+                    LOGGER.info(
+                        f"Epoch {epoch+1} - EMA: Base: {ema_base_acc:.4f}, Novel: {ema_novel_acc:.4f}, HM: {ema_hm:.4f}"
+                    )
+                    
+                    WANDB.log({
+                        "ema_base_accuracy": ema_base_acc,
+                        "ema_novel_accuracy": ema_novel_acc,
+                        "ema_harmonic_mean": ema_hm,
+                        "epoch": epoch+1,
+                    })
+                    
+                    # Use EMA model for best model tracking if it performs better
+                    if ema_hm > hm:
+                        base_accuracy = ema_base_acc
+                        novel_accuracy = ema_novel_acc
+                        hm = ema_hm
+                        LOGGER.info(f"Using EMA model performance for best model tracking")
+                
             except Exception as e:
                 LOGGER.error(f"Error during evaluation at epoch {epoch+1}: {e}")
                 # Set default values if evaluation fails
@@ -2380,12 +2827,17 @@ def train_cocoop_simple():
                 # Save best model
                 try:
                     os.makedirs(CFG["training"]["checkpoint_dir"], exist_ok=True)
-                    best_model_path = os.path.join(CFG["training"]["checkpoint_dir"], "simple_model_best.pth")
+                    best_model_path = os.path.join(CFG["training"]["checkpoint_dir"], "coop_model_best.pth")
+                    
+                    # Save the model that performed best (either regular or EMA)
+                    save_model = avg_model if (avg_model and ema_hm > base_accuracy) else model
+                    
                     torch.save({
-                        "model": model.state_dict(),
+                        "model": save_model.state_dict(),
                         "optimizer": optimizer.state_dict(),
                         "epoch": epoch + 1,
                         "accuracy": hm,
+                        "is_ema": (avg_model and ema_hm > base_accuracy),
                     }, best_model_path)
                     LOGGER.info(f"Saved best model with accuracy {hm:.4f}")
                 except Exception as e:
@@ -2403,7 +2855,7 @@ def train_cocoop_simple():
             # Save emergency checkpoint
             try:
                 os.makedirs(CFG["training"]["checkpoint_dir"], exist_ok=True)
-                emergency_path = os.path.join(CFG["training"]["checkpoint_dir"], f"emergency_epoch_{epoch + 1}.pth")
+                emergency_path = os.path.join(CFG["training"]["checkpoint_dir"], f"cocoop_emergency_epoch_{epoch + 1}.pth")
                 torch.save({
                     "model": model.state_dict(),
                     "optimizer": optimizer.state_dict(),
@@ -2416,9 +2868,16 @@ def train_cocoop_simple():
             # Continue to next epoch instead of raising
             continue
 
-    # Final evaluation with try-except
+    # Final evaluation
     LOGGER.info("==== Final Evaluation ====")
     try:
+        # Load best model for final evaluation
+        best_model_path = os.path.join(CFG["training"]["checkpoint_dir"], "coop_model_best.pth")
+        if os.path.exists(best_model_path):
+            checkpoint = torch.load(best_model_path, map_location=DEVICE)
+            model.load_state_dict(checkpoint["model"])
+            LOGGER.info(f"Loaded best model from epoch {checkpoint['epoch']} for final evaluation")
+        
         final_base_acc = evaluate(
             model=model,
             dataloader=test_base_loader,
@@ -2440,7 +2899,7 @@ def train_cocoop_simple():
         )
     except Exception as e:
         LOGGER.error(f"Error during final evaluation: {e}")
-        final_base_acc, final_novel_acc, final_hm = base_accuracy, novel_accuracy, hm  # Use last known values
+        final_base_acc, final_novel_acc, final_hm = base_accuracy, novel_accuracy, hm
 
     return final_base_acc, final_novel_acc, final_hm
 
