@@ -38,7 +38,6 @@ import math
 import os
 import random
 import re
-from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple, Union
@@ -84,7 +83,7 @@ CFG = {
         "resume_from": "best",
         "batch_size": 32,
         "test_batch_size": 64,
-        "epochs": 50,
+        "epochs": 20,
         "warmup_epochs": 1,
         "patience": 7,  # Early stopping patience
         "shots_per_class": 10,  # k=10 for Flowers 102
@@ -99,7 +98,7 @@ CFG = {
             "warmup_epochs": 1,
             "eta_min": 1e-6,
         },
-        "augmentation_mode": "rotate_illumination",  # choose from: None, "rotate_illumination", "rotate_contrast", "rotate_contrast_illumination"
+        "augmentation_mode": None,  # choose from: None, "rotate_illumination", "rotate_contrast", "rotate_contrast_illumination"
         "seed": 47,
     },
     "input": {
@@ -113,7 +112,7 @@ CFG = {
     "validation": {
         "evaluate_zero_shot": True,  # Evaluate CLIP zero-shot as baseline
         "ema": {
-            "enabled": True,  
+            "enabled": True, # this doesn't need to be disabled
             "decay": 0.999,  # EMA decay factor
         },
     },
@@ -143,7 +142,7 @@ CFG = {
         },
     },
     "bg_masking": {
-        "enabled": True,  
+        "enabled": False,  
         "backbone": "unet",  # Segmentation model backbone
         "encoder": {
             "name": "mobilenet_v2",  # Encoder for segmentation model
@@ -466,10 +465,6 @@ def load_clip_model(model_name="ViT-B/16", pretrained=None):
         LOGGER.error(f"Error loading CLIP model: {e}")
         raise
 
-# Get class names for the dataset
-def get_class_names(dataset):
-    return CLASS_NAMES
-
 # Evaluate CLIP'S zero-shot performance
 def zero_shot_evaluation(model, data_loader, class_names, class_indices=None, text_templates=None):
     if text_templates is None:
@@ -490,7 +485,6 @@ def zero_shot_evaluation(model, data_loader, class_names, class_indices=None, te
         all_texts.extend(class_texts)
     
     text_tokens = clip.tokenize(all_texts).to(DEVICE)
-    
     with torch.no_grad():
         text_features = model.encode_text(text_tokens)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
@@ -605,7 +599,8 @@ class PromptLearner(nn.Module):
 
         # Prepare class names and prompts
         classnames = [name.replace("_", " ") for name in classnames]
-        name_lens = [len(clip.tokenize(name)[0]) for name in classnames]
+        simple_tokenizer = clip.simple_tokenizer.SimpleTokenizer()
+        name_lens = [len(simple_tokenizer.encode(name)) for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
         
         tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts]).to(DEVICE)
@@ -685,7 +680,7 @@ class PromptLearner(nn.Module):
 # CoOp model: CLIP with learnable prompts, optional background masking, and PromptSRC support
 class CoOp(nn.Module):
     def __init__(self, classnames, clip_model, n_ctx=4, ctx_init="", class_token_position="end", csc=False, 
-                 segmentation_model=None):
+                 segmentation_model=None, segmentation_transform=None):
         super().__init__()
         self.prompt_learner = PromptLearner(
             clip_model, classnames, n_ctx, ctx_init, class_token_position, csc
@@ -702,7 +697,7 @@ class CoOp(nn.Module):
         
         # Background masking components
         self.segmentation_model = segmentation_model
-        self.bg_masking_enabled = CFG["bg_masking"]["enabled"] and segmentation_model is not None
+        self.segmentation_transform = segmentation_transform
         
         # Add prompt ensemble
         if CFG["promptsrc"]["enabled"] and CFG["promptsrc"]["prompt_ensemble"]["enabled"]:
@@ -719,37 +714,16 @@ class CoOp(nn.Module):
         for param in self.text_encoder.parameters():
             param.requires_grad_(False)
 
-    def apply_background_mask(self, images, dataset_indices=None):
-        if not self.bg_masking_enabled or self.segmentation_model is None:
-            return images
-            
-        try:
-            with torch.no_grad():
-                # Generate masks using segmentation model
-                masks = self.segmentation_model(images)
-                masks = torch.sigmoid(masks)  # Ensure masks are in [0, 1]
-                
-                # Apply threshold to create binary masks
-                masks = (masks > 0.5).float()
-                
-                # Expand masks to match image channels
-                if masks.dim() == 3:  # [B, H, W]
-                    masks = masks.unsqueeze(1)  # [B, 1, H, W]
-                if masks.size(1) == 1 and images.size(1) == 3:  # Expand to RGB
-                    masks = masks.expand(-1, 3, -1, -1)  # [B, 3, H, W]
-                
-                # Apply masks to suppress background (multiply by mask)
-                masked_images = images * masks
-                
-                return masked_images
-                
-        except Exception as e:
-            LOGGER.warning(f"Error applying background mask: {e}. Using original images.")
-            return images
+    def apply_background_masking_if_needed(self, images):
+        if self.segmentation_model:
+            seg_input = self.segmentation_tranforms(images) if self.segmentation_tranforms else images
+            mask = self.segmentation_model(seg_input)
+            binary_mask = (mask > 0.5).int()
+            return binary_mask * images  
+        return images 
 
-    def forward(self, image, dataset_indices=None):
-        if self.bg_masking_enabled:
-            image = self.apply_background_mask(image, dataset_indices)
+    def forward(self, image):
+        image = self.apply_background_masking_if_needed(image)
         
         # Extract image features
         image_features = self.image_encoder(image)
@@ -782,7 +756,7 @@ class CoOp(nn.Module):
 # Functions for training the CoOp model and evaluating its performance.
 
 # %%
-def train_coop(model, train_loader, optimizer, criterion, epoch, device, avg_model=None, 
+def train_coop(model, train_loader, optimizer, criterion, epoch, avg_model=None, 
                hard_pair_miner=None, use_helip=False, base_model=None, use_promptsrc=False):
     """Train CoOp model for one epoch with EMA, HELIP, and PromptSRC support"""
     model.train()
@@ -820,20 +794,20 @@ def train_coop(model, train_loader, optimizer, criterion, epoch, device, avg_mod
     for batch_idx, (images, targets) in enumerate(progress_bar):
         try:
 
-            images = images.to(device)
-            targets = targets.to(device)
+            images = images.to(DEVICE)
+            targets = targets.to(DEVICE)
             
             optimizer.zero_grad()
             
             # Forward pass
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast("cuda"):
                 logits = model(images)
                 contrastive_loss = criterion(logits, targets)
                 
                 # Additional losses
-                hnml_loss = torch.tensor(0.0, device=device)
-                ma_loss = torch.tensor(0.0, device=device)
-                td_loss = torch.tensor(0.0, device=device)
+                hnml_loss = torch.tensor(0.0, device=DEVICE)
+                ma_loss = torch.tensor(0.0, device=DEVICE)
+                td_loss = torch.tensor(0.0, device=DEVICE)
                 
                 # Apply PromptSRC
                 if use_promptsrc and base_model is not None and model.current_image_features is not None and model.current_text_features is not None:
@@ -848,7 +822,7 @@ def train_coop(model, train_loader, optimizer, criterion, epoch, device, avg_mod
                         # Frozen text features - create text templates for each class in the batch
                         text_inputs = [f"a photo of a {CLASS_NAMES[t.item()]}, a type of flower." for t in targets]
                         original_text_features = base_model.encode_text(
-                            clip.tokenize(text_inputs).to(device)
+                            clip.tokenize(text_inputs).to(DEVICE)
                         )
                         original_text_features = original_text_features / original_text_features.norm(dim=-1, keepdim=True)
                     
@@ -979,27 +953,26 @@ def train_coop(model, train_loader, optimizer, criterion, epoch, device, avg_mod
                 })
             
             # Log to wandb
-            if CFG["wandb"]:
-                log_data = {
-                    "train_batch_loss": loss.item(),
-                    "train_batch_contrastive_loss": contrastive_loss.item(),
-                    "train_batch_acc": 100. * predicted.eq(targets).sum().item() / targets.size(0),
-                    "learning_rate": optimizer.param_groups[0]['lr'],
-                    "epoch": epoch + 1,
-                    "batch": batch_idx + epoch * len(train_loader),
-                }
-                
-                if use_helip:
-                    log_data["train_batch_hnml_loss"] = hnml_loss.item() if isinstance(hnml_loss, torch.Tensor) else 0.0
-                    log_data["lambda_hnml"] = lambda_hnml
-                
-                if use_promptsrc:
-                    log_data["train_batch_ma_loss"] = ma_loss.item() if isinstance(ma_loss, torch.Tensor) else 0.0
-                    log_data["train_batch_td_loss"] = td_loss.item() if isinstance(td_loss, torch.Tensor) else 0.0
-                    log_data["lambda_ma"] = lambda_ma
-                    log_data["lambda_td"] = lambda_td
-                
-                WANDB.log(log_data)
+            log_data = {
+                "train_batch_loss": loss.item(),
+                "train_batch_contrastive_loss": contrastive_loss.item(),
+                "train_batch_acc": 100. * predicted.eq(targets).sum().item() / targets.size(0),
+                "learning_rate": optimizer.param_groups[0]['lr'],
+                "epoch": epoch + 1,
+                "batch": batch_idx + epoch * len(train_loader),
+            }
+            
+            if use_helip:
+                log_data["train_batch_hnml_loss"] = hnml_loss.item() if isinstance(hnml_loss, torch.Tensor) else 0.0
+                log_data["lambda_hnml"] = lambda_hnml
+            
+            if use_promptsrc:
+                log_data["train_batch_ma_loss"] = ma_loss.item() if isinstance(ma_loss, torch.Tensor) else 0.0
+                log_data["train_batch_td_loss"] = td_loss.item() if isinstance(td_loss, torch.Tensor) else 0.0
+                log_data["lambda_ma"] = lambda_ma
+                log_data["lambda_td"] = lambda_td
+            
+            WANDB.log(log_data)
         
         except RuntimeError as e:
             if 'out of memory' in str(e).lower():
@@ -1048,7 +1021,7 @@ def train_coop(model, train_loader, optimizer, criterion, epoch, device, avg_mod
     return avg_loss, avg_acc
 
 @torch.no_grad()
-def evaluate(model, data_loader, criterion, device):
+def evaluate(model, data_loader, criterion):
     """Evaluate model on a dataset"""
     model.eval()
     total_loss = 0.0
@@ -1060,8 +1033,8 @@ def evaluate(model, data_loader, criterion, device):
     for images, targets in progress_bar:
         try:
             # Move data to device
-            images = images.to(device)
-            targets = targets.to(device)
+            images = images.to(DEVICE)
+            targets = targets.to(DEVICE)
             
             # Forward pass
             logits = model(images)
@@ -1092,57 +1065,56 @@ def evaluate(model, data_loader, criterion, device):
     
     return avg_loss, avg_acc
 
-def evaluate_and_report(model, val_loader, test_base_loader, test_novel_loader, criterion, device):
-    """Evaluate model on validation and test sets, return metrics"""
-    try:
-        # Validation accuracy
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+def evaluate_and_report_validation(model, val_loader, criterion, ema=False):
+    """Evaluate model on validation set, return metrics"""
+    # Validation accuracy
+    val_loss, val_acc = evaluate(model, val_loader, criterion)
+    
+    # Log results
+    LOGGER.info(f"Validation Accuracy: {val_acc:.2f}%")
+    
+
+    return {
+        f'{"ema_" if ema else ""}val_acc': val_acc,
+        f'{"ema_" if ema else ""}val_loss': val_loss,
+    }
         
-        # Test base accuracy
-        test_base_loss, test_base_acc = evaluate(model, test_base_loader, criterion, device)
-        
-        # Test novel accuracy
-        test_novel_loss, test_novel_acc = evaluate(model, test_novel_loader, criterion, device)
-        
-        # Calculate harmonic mean
-        if test_base_acc > 0 and test_novel_acc > 0:
-            harmonic_mean = 2 * (test_base_acc * test_novel_acc) / (test_base_acc + test_novel_acc)
-        else:
-            harmonic_mean = 0.0
-        
-        # Log results
-        LOGGER.info(f"Validation Accuracy: {val_acc:.2f}%")
-        LOGGER.info(f"Test Base Accuracy: {test_base_acc:.2f}%")
-        LOGGER.info(f"Test Novel Accuracy: {test_novel_acc:.2f}%")
-        LOGGER.info(f"Harmonic Mean: {harmonic_mean:.2f}%")
-        
-        return {
-            'val_acc': val_acc,
-            'val_loss': val_loss,
-            'test_base_acc': test_base_acc,
-            'test_base_loss': test_base_loss,
-            'test_novel_acc': test_novel_acc,
-            'test_novel_loss': test_novel_loss,
-            'harmonic_mean': harmonic_mean
-        }
-        
-    except Exception as e:
-        LOGGER.error(f"Error in evaluation: {e}")
-        return {
-            'val_acc': 0.0, 'val_loss': float('inf'),
-            'test_base_acc': 0.0, 'test_base_loss': float('inf'),
-            'test_novel_acc': 0.0, 'test_novel_loss': float('inf'),
-            'harmonic_mean': 0.0
-        }
+
+def evaluate_and_report_test(model, test_base_loader, test_novel_loader, criterion, ema=False):
+    """Evaluate model on test sets, return metrics"""
+    # Test base accuracy
+    test_base_loss, test_base_acc = evaluate(model, test_base_loader, criterion)
+    
+    # Test novel accuracy
+    test_novel_loss, test_novel_acc = evaluate(model, test_novel_loader, criterion)
+    
+    # Calculate harmonic mean
+    if test_base_acc > 0 and test_novel_acc > 0:
+        harmonic_mean = 2 * (test_base_acc * test_novel_acc) / (test_base_acc + test_novel_acc)
+    else:
+        harmonic_mean = 0.0
+    
+    # Log results
+    LOGGER.info(f"Test Base Accuracy: {test_base_acc:.2f}%")
+    LOGGER.info(f"Test Novel Accuracy: {test_novel_acc:.2f}%")
+    LOGGER.info(f"Harmonic Mean: {harmonic_mean:.2f}%")
+    
+    return {
+        f'{"ema_" if ema else ""}test_base_acc': test_base_acc,
+        f'{"ema_" if ema else ""}test_base_loss': test_base_loss,
+        f'{"ema_" if ema else ""}test_novel_acc': test_novel_acc,
+        f'{"ema_" if ema else ""}test_novel_loss': test_novel_loss,
+        f'{"ema_" if ema else ""}harmonic_mean': harmonic_mean
+    }
+
 
 def log_metrics(metrics, epoch):
     """Log metrics to wandb and tensorboard"""
-    if CFG["wandb"]:
-        log_data = {}
-        for key, value in metrics.items():
-            log_data[key] = value
-        log_data["epoch"] = epoch
-        WANDB.log(log_data)
+    log_data = {}
+    for key, value in metrics.items():
+        log_data[key] = value
+    log_data["epoch"] = epoch
+    WANDB.log(log_data)
 
 # %% [markdown]
 # ## Background Masking Functions
@@ -1198,11 +1170,10 @@ def fine_tune_segmenter(data_loader, val_data_loader, segmentation_model):
                 "seg_avg_loss": f"{total_loss / (batch + 1):.4f}",
             })
 
-            if CFG["wandb"]:
-                WANDB.log({
-                    "seg_train_loss": loss.item(),
-                    "seg_train_avg_loss": total_loss / (batch + 1),
-                })
+            WANDB.log({
+                "seg_train_loss": loss.item(),
+                "seg_train_avg_loss": total_loss / (batch + 1),
+            })
                 
         avg_loss = total_loss / len(data_loader)
         LOGGER.info(f"Segmentation epoch {epoch} - Training Loss: {avg_loss:.4f}")
@@ -1210,16 +1181,15 @@ def fine_tune_segmenter(data_loader, val_data_loader, segmentation_model):
     LOGGER.info("Finished fine-tuning segmentation model, freezing all parameters")
     for p in segmentation_model.parameters():
         p.requires_grad = False
+    segmentation_model.eval()
 
     LOGGER.info("Testing segmentation model")
-    segmentation_model.eval()
     test_loss = 0
-    with torch.no_grad():
-        for img, mask in val_data_loader:
-            img = img.to(DEVICE)
-            mask = mask.to(DEVICE)
-            pred = segmentation_model(img)
-            test_loss += loss_fn(pred, mask).item()
+    for img, mask in val_data_loader:
+        img = img.to(DEVICE)
+        mask = mask.to(DEVICE)
+        pred = segmentation_model(img)
+        test_loss += loss_fn(pred, mask).item()
     
     test_loss /= len(val_data_loader)
     LOGGER.info(f"Segmentation model average test loss: {test_loss:.4f}")
@@ -1269,16 +1239,6 @@ def setup_segmentation_module():
     else:
         LOGGER.info("Background masking disabled")
         return None, None
-
-def enable_background_masking():
-    """Enable background masking in the configuration"""
-    CFG["bg_masking"]["enabled"] = True
-    LOGGER.info("Background masking enabled")
-
-def disable_background_masking():
-    """Disable background masking in the configuration"""
-    CFG["bg_masking"]["enabled"] = False
-    LOGGER.info("Background masking disabled")
 
 # %% [markdown]
 # ## Data Augmentation Functions
@@ -1333,24 +1293,6 @@ def image_augmentation(mode, base_preprocess):
     else:
         # No augmentation, just return base preprocessing
         return base_preprocess
-
-def enable_augmentation(mode):
-    """Enable data augmentation with the specified mode"""
-    if mode in [None, "rotate_illumination", "rotate_contrast", "rotate_contrast_illumination"]:
-        CFG["training"]["augmentation_mode"] = mode
-        LOGGER.info(f"Data augmentation set to: {mode}")
-    else:
-        LOGGER.warning(f"Unknown augmentation mode: {mode}. Available modes: None, rotate_illumination, rotate_contrast, rotate_contrast_illumination")
-
-def disable_augmentation():
-    """Disable data augmentation"""
-    CFG["training"]["augmentation_mode"] = None
-    LOGGER.info("Data augmentation disabled")
-
-def get_available_augmentations():
-    """Get list of available augmentation modes"""
-    return [None, "rotate_illumination", "rotate_contrast", "rotate_contrast_illumination"]
-
 
 
 # %% [markdown]
@@ -1585,21 +1527,6 @@ def hard_negative_margin_loss(
         return hnml_loss / count
     return hnml_loss
 
-
-def enable_helip():
-    """Enable HELIP in the configuration"""
-    CFG["helip"]["enabled"] = True
-    LOGGER.info("HELIP enabled")
-
-def disable_helip():
-    """Disable HELIP in the configuration"""
-    CFG["helip"]["enabled"] = False
-    LOGGER.info("HELIP disabled")
-
-def get_helip_config():
-    """Get current HELIP configuration"""
-    return CFG["helip"]
-
 # %% [markdown]
 # ## PromptSRC Implementation
 #
@@ -1724,23 +1651,6 @@ def get_promptsrc_weights(epoch=None, max_epochs=None):
     lambda_td = CFG["promptsrc"]["textual_diversity"]["lambda_td"]
     return lambda_ma, lambda_td
 
-
-def enable_promptsrc():
-    """Enable PromptSRC in the configuration"""
-    CFG["promptsrc"]["enabled"] = True
-    LOGGER.info("PromptSRC enabled")
-
-
-def disable_promptsrc():
-    """Disable PromptSRC in the configuration"""
-    CFG["promptsrc"]["enabled"] = False
-    LOGGER.info("PromptSRC disabled")
-
-
-def get_promptsrc_config():
-    """Get current PromptSRC configuration"""
-    return CFG["promptsrc"]
-
 # %% [markdown]
 # ## Main Function for Running Experiments
 #
@@ -1785,16 +1695,13 @@ def main():
             test_transform=preprocess
         )
         
-        # Get class names
-        class_names = get_class_names(train_set)
-        
         # Split dataset into base and novel categories
         base_classes, novel_classes = base_novel_categories(train_set)
         LOGGER.info(f"Base classes: {len(base_classes)}, Novel classes: {len(novel_classes)}")
         
         # Split datasets
-        train_base, train_novel = split_data(train_set, base_classes)
-        val_base, val_novel = split_data(val_set, base_classes)
+        train_base, _ = split_data(train_set, base_classes)
+        val_base, _ = split_data(val_set, base_classes)
         test_base, test_novel = split_data(test_set, base_classes)
         
         # Create few-shot dataset for training
@@ -1826,14 +1733,14 @@ def main():
             LOGGER.info("Evaluating CLIP on base categories")
             base_acc = zero_shot_evaluation(
                 clip_model, test_base_loader, 
-                [class_names[i] for i in base_classes],
+                [CLASS_NAMES[i] for i in base_classes],
                 base_classes
             )
             
             LOGGER.info("Evaluating CLIP on novel categories")
             novel_acc = zero_shot_evaluation(
                 clip_model, test_novel_loader, 
-                [class_names[i] for i in novel_classes],
+                [CLASS_NAMES[i] for i in novel_classes],
                 novel_classes
             )
             
@@ -1848,23 +1755,23 @@ def main():
             LOGGER.info(f"CLIP Zero-Shot - Harmonic Mean: {harmonic_mean:.2f}%")
             
             # Log to wandb
-            if CFG["wandb"]:
-                WANDB.log({
-                    "zero_shot_base_acc": base_acc,
-                    "zero_shot_novel_acc": novel_acc,
-                    "zero_shot_harmonic_mean": harmonic_mean,
-                })
+            WANDB.log({
+                "zero_shot_base_acc": base_acc,
+                "zero_shot_novel_acc": novel_acc,
+                "zero_shot_harmonic_mean": harmonic_mean,
+            })
         
         # Create CoOp model
         coop_config = CFG["COOP"]["prompt_learner"]
         model = CoOp(
-            classnames=[class_names[i] for i in base_classes + novel_classes],
+            classnames=[CLASS_NAMES[i] for i in base_classes + novel_classes],
             clip_model=clip_model,
             n_ctx=coop_config["n_ctx"],
             ctx_init=coop_config["ctx_init"],
             class_token_position=coop_config["class_token_position"],
             csc=coop_config["csc"],
-            segmentation_model=segmentation_model
+            segmentation_model=segmentation_model,
+            segmentation_transform=segmentation_transform,
         ).to(DEVICE)
         
         # Log parameter counts
@@ -1929,19 +1836,19 @@ def main():
         criterion = nn.CrossEntropyLoss()
         
         # Training loop
-        best_harmonic_mean = 0.0
+        best_validation_acc = 0.0
         best_epoch = -1
         patience_counter = 0
         
         # Evaluate before training
         LOGGER.info("Evaluating before training")
-        initial_metrics = evaluate_and_report(model, val_loader, test_base_loader, test_novel_loader, criterion, DEVICE)
+        initial_metrics = evaluate_and_report_test(model, test_base_loader, test_novel_loader, criterion)
         log_metrics(initial_metrics, 0)
         
         for epoch in range(CFG["training"]["epochs"]):
             # Train for one epoch
             train_loss, train_acc = train_coop(
-                model, train_loader, optimizer, criterion, epoch, DEVICE, avg_model,
+                model, train_loader, optimizer, criterion, epoch, avg_model,
                 hard_pair_miner, use_helip, clip_model, use_promptsrc
             )
             
@@ -1951,65 +1858,47 @@ def main():
             
             # Evaluate the model
             LOGGER.info(f"Epoch {epoch+1}/{CFG['training']['epochs']} evaluation")
-            metrics = evaluate_and_report(model, val_loader, test_base_loader, test_novel_loader, criterion, DEVICE)
+            val_metrics = evaluate_and_report_validation(model, val_loader, criterion)
             
             # Evaluate EMA model if available
             ema_metrics = None
             if avg_model:
                 LOGGER.info(f"Epoch {epoch+1}/{CFG['training']['epochs']} EMA evaluation")
-                ema_metrics = evaluate_and_report(avg_model, val_loader, test_base_loader, test_novel_loader, criterion, DEVICE)
-                
-                # Log EMA metrics with prefix
-                ema_log_metrics = {"ema_" + k: v for k, v in ema_metrics.items()}
-                log_metrics(ema_log_metrics, epoch + 1)
-                
-                LOGGER.info(f"EMA - Validation Accuracy: {ema_metrics['val_acc']:.2f}%")
-                LOGGER.info(f"EMA - Test Base Accuracy: {ema_metrics['test_base_acc']:.2f}%")
-                LOGGER.info(f"EMA - Test Novel Accuracy: {ema_metrics['test_novel_acc']:.2f}%")
-                LOGGER.info(f"EMA - Harmonic Mean: {ema_metrics['harmonic_mean']:.2f}%")
+                ema_metrics = evaluate_and_report_validation(avg_model, val_loader, criterion, ema=True)
+                log_metrics(ema_metrics, epoch + 1)      
             
             # Log metrics
             epoch_metrics = {
                 "train_loss": train_loss,
                 "train_acc": train_acc,
-                **metrics
+                **val_metrics,
             }
             log_metrics(epoch_metrics, epoch + 1)
             
-            # Choose best model (regular vs EMA)
-            current_harmonic_mean = metrics['harmonic_mean']
-            use_ema = False
-            
-            if ema_metrics and ema_metrics['harmonic_mean'] > current_harmonic_mean:
-                current_harmonic_mean = ema_metrics['harmonic_mean']
-                use_ema = True
-                LOGGER.info(f"EMA model performs better: {ema_metrics['harmonic_mean']:.2f}% vs {metrics['harmonic_mean']:.2f}%")
-            # Check for best model (using harmonic mean)
-            if current_harmonic_mean > best_harmonic_mean:
-                best_harmonic_mean = current_harmonic_mean
+            # Choose best model
+            current_val_acc = val_metrics['val_acc']
+            if current_val_acc > best_validation_acc:
+                best_validation_acc = current_val_acc
                 best_epoch = epoch
                 patience_counter = 0
                 
-                # Save best model (either regular or EMA)
+                # Save best model
                 checkpoint_dir = CFG["training"]["checkpoint_dir"]
                 os.makedirs(checkpoint_dir, exist_ok=True)
                 best_model_path = os.path.join(checkpoint_dir, 'best_model.pth')
                 
-                # Choose which model to save
-                model_to_save = avg_model if use_ema else model
-                save_metrics = ema_metrics if use_ema else metrics
-                
                 torch.save({
                     'epoch': epoch + 1,
-                    'model_state_dict': model_to_save.state_dict(),
+                    'model_state_dict': model.state_dict(),
+                    'ema_model_state_dict': avg_model if avg_model else None,
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
-                    'metrics': save_metrics,
+                    'metrics': val_metrics,
+                    'ema_metrics': ema_metrics,
                     'config': CFG,
-                    'is_ema': use_ema
                 }, best_model_path)
                 
-                LOGGER.info(f"New best {'EMA ' if use_ema else ''}model saved with harmonic mean: {best_harmonic_mean:.2f}%")
+                LOGGER.info(f"New best model saved with validation accuracy: {best_validation_acc:.2f}%")
             else:
                 patience_counter += 1
             
@@ -2026,33 +1915,37 @@ def main():
                 checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
                 
                 # Load into appropriate model
-                if checkpoint.get('is_ema', False) and avg_model:
-                    avg_model.load_state_dict(checkpoint['model_state_dict'])
-                    final_model = avg_model
+                if avg_model and checkpoint['ema_model_state_dict']:
+                    avg_model.load_state_dict(checkpoint['ema_model_state_dict'])
                     LOGGER.info("Loaded best EMA model for final evaluation")
                 else:
                     model.load_state_dict(checkpoint['model_state_dict'])
-                    final_model = model
                     LOGGER.info("Loaded best regular model for final evaluation")
                 
                 # Final evaluation
                 LOGGER.info("Final evaluation with best model")
-                final_metrics = evaluate_and_report(final_model, val_loader, test_base_loader, test_novel_loader, criterion, DEVICE)
-                
+                final_metrics = evaluate_and_report_test(model, test_base_loader, test_novel_loader, criterion)
                 LOGGER.info("=== FINAL RESULTS ===")
                 LOGGER.info(f"Best epoch: {best_epoch + 1}")
-                LOGGER.info(f"Best model type: {'EMA' if checkpoint.get('is_ema', False) else 'Regular'}")
-                LOGGER.info(f"Final validation accuracy: {final_metrics['val_acc']:.2f}%")
                 LOGGER.info(f"Final test base accuracy: {final_metrics['test_base_acc']:.2f}%")
                 LOGGER.info(f"Final test novel accuracy: {final_metrics['test_novel_acc']:.2f}%")
                 LOGGER.info(f"Final harmonic mean: {final_metrics['harmonic_mean']:.2f}%")
+                final_log = {"final_" + k: v for k, v in final_metrics.items()}
+                final_log["best_epoch"] = best_epoch + 1
+        
+                if avg_model:
+                    LOGGER.info("Final evaluation with best ema model")
+                    final_ema_metrics = evaluate_and_report_test(avg_model, test_base_loader, test_novel_loader, criterion, ema=True)
+                    LOGGER.info("=== FINAL EMA RESULTS ===")
+                    LOGGER.info(f"Final test base accuracy: {final_ema_metrics['ema_test_base_acc']:.2f}%")
+                    LOGGER.info(f"Final test novel accuracy: {final_ema_metrics['ema_test_novel_acc']:.2f}%")
+                    LOGGER.info(f"Final harmonic mean: {final_ema_metrics['ema_harmonic_mean']:.2f}%")
+                    for k, v in final_ema_metrics.items():
+                        final_log["final" + k] = v 
+            
                 
                 # Log final results to wandb
-                if CFG["wandb"]:
-                    final_log = {"final_" + k: v for k, v in final_metrics.items()}
-                    final_log["best_epoch"] = best_epoch + 1
-                    final_log["best_model_type"] = "EMA" if checkpoint.get('is_ema', False) else "Regular"
-                    WANDB.log(final_log)
+                WANDB.log(final_log)
                 
                 return final_metrics
             else:
@@ -2067,8 +1960,7 @@ def main():
         raise e
     finally:
         # Cleanup
-        if CFG["wandb"]:
-            WANDB.finish()
+        WANDB.finish()
 
 # %%
 if __name__ == "__main__":
