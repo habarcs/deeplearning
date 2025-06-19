@@ -82,8 +82,7 @@ CFG = {
         "resume_from": "best",
         "batch_size": 32,
         "test_batch_size": 64,
-        "epochs": 40,
-        "warmup_epochs": 1,
+        "epochs": 100,
         "patience": 7,  # Early stopping patience
         "shots_per_class": 10,  # k=10 for Flowers 102
         "checkpoint_dir": "./checkpoints",
@@ -94,7 +93,6 @@ CFG = {
         },
         "scheduler": {
             "type": "cosine",
-            "warmup_epochs": 1,
             "eta_min": 1e-6,
         },
         "augmentation_mode": None,  # choose from: None, "rotate_illumination", "rotate_contrast", "rotate_contrast_illumination"
