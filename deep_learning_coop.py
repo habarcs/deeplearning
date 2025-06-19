@@ -2178,7 +2178,7 @@ def main():
             val_metrics = evaluate_and_report_validation(model, val_loader, criterion)
 
             # Evaluate EMA model if available
-            if avg_model:
+            if avg_model and epoch + 1 >= CFG["validation"]["ema"]["start_epoch"]:
                 LOGGER.info(
                     f"Epoch {epoch + 1}/{CFG['training']['epochs']} EMA evaluation"
                 )
