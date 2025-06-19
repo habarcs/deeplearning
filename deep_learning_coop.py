@@ -2186,6 +2186,8 @@ def main():
                     avg_model, val_loader, criterion, ema=True
                 )
                 log_metrics(ema_metrics, epoch + 1)
+            else:
+                ema_metrics = {}
 
             # Log metrics
             epoch_metrics = {
