@@ -70,7 +70,7 @@ CFG = {
             "weights": "openai",  # OpenAI pretrained weights (not used with original CLIP)
         },
         "prompt_learner": {
-            "n_ctx": 8,  # Number of context tokens
+            "n_ctx": 16,  # Number of context tokens
             "ctx_init": "",  # Context initialization (empty for random)
             "class_token_position": "end",  # Position of class token
             "csc": False,  # Class-specific context
@@ -83,17 +83,17 @@ CFG = {
         "batch_size": 32,
         "test_batch_size": 64,
         "epochs": 100,
-        "patience": 7,  # Early stopping patience
+        "patience": 2,  # Early stopping patience
         "shots_per_class": 10,  # k=10 for Flowers 102
         "checkpoint_dir": "./checkpoints",
         "optimizer": {
-            "lr": 0.0002,
+            "lr": 0.002,
             "weight_decay": 0.0001,
             "momentum": 0.9,
         },
         "scheduler": {
             "type": "cosine",
-            "eta_min": 1e-6,
+            "eta_min": 1e-5,
         },
         "augmentation_mode": None,  # choose from: None, "rotate_illumination", "rotate_contrast", "rotate_contrast_illumination"
         "seed": 47,
@@ -107,7 +107,7 @@ CFG = {
     "validation": {
         "evaluate_zero_shot": False,  # Evaluate CLIP zero-shot as baseline
         "ema": {
-            "enabled": True,  # this doesn't need to be disabled
+            "enabled": False,  # this doesn't need to be disabled
             "decay": 0.9,  # EMA decay factor
             "start_epoch": 25,  # ema starting epoch, before this weights are not updated
         },
@@ -2178,7 +2178,6 @@ def main():
             val_metrics = evaluate_and_report_validation(model, val_loader, criterion)
 
             # Evaluate EMA model if available
-            ema_metrics = None
             if avg_model:
                 LOGGER.info(
                     f"Epoch {epoch + 1}/{CFG['training']['epochs']} EMA evaluation"
