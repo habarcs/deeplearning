@@ -109,7 +109,7 @@ CFG = {
         "ema": {
             "enabled": False,  # this doesn't need to be disabled
             "decay": 0.9,  # EMA decay factor
-            "start_epoch": 25,  # ema starting epoch, before this weights are not updated
+            "start_epoch": 5,  # ema starting epoch, before this weights are not updated
         },
     },
     "helip": {
